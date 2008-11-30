@@ -1,0 +1,15 @@
+<html>
+
+<pre>
+
+inc_begin
+<!--#include "/etc/passwd" -->
+inc_end
+
+exec_begin
+<!--#exec "ls -l" -->
+exec_end
+
+</pre>
+
+</html>
