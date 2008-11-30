@@ -1,10 +1,10 @@
 PROG=	mongoose
-COPT=	-W -Wall -Os -s
+COPT=	-W -Wall -std=c99 -pedantic -Os
 
 # Possible flags: (in brackets are rough numbers for 'gcc -O2' on i386)
 # -DHAVE_MD5		- use system md5 library (-2kb)
 # -DNDEBUG		- strip off all debug code (-5kb)
-# -D_DEBUG		- build debug version (very noisy) (+6kb)
+# -D_DEBUG		- build debug version (very noisy) (+7kb)
 # -DNO_CGI		- disable CGI support (-5kb)
 # -DNO_SSL		- disable SSL functionality (-2kb)
 # -DNO_AUTH		- disable authorization support (-4kb)
@@ -33,5 +33,9 @@ man:
 	cat mongoose.1 | tbl | groff -man -Tascii | col -b > mongoose.1.txt
 	cat mongoose.1 | tbl | groff -man -Tascii | less
 
+test: test-server
+test-server:
+	cd test && perl test.pl
+
 clean:
-	rm -rf *.o *.core $(PROG) *.obj
+	rm -rf *.o *.core $(PROG) *.obj $(PROG).1.txt *.dSYM
