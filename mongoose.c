@@ -265,7 +265,8 @@ struct mg_connection {
 	time_t		birth_time;	/* Time connection was accepted	*/
 	int		status;		/* Status code			*/
 	bool_t		free_post_data;	/* post_data was malloc-ed	*/
-	bool_t		keep_alive;	/* post_data was malloc-ed	*/
+	bool_t		keep_alive;	/* Keep-Alive flag		*/
+	int		num_bytes_used;	/* Bytes used from post_data	*/
 	uint64_t	num_bytes_sent;	/* Total bytes sent to client	*/
 };
 
@@ -746,10 +747,11 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 #endif /* !NO_CGI */
 #endif /* _WIN32 */
 
-static int
-push(int fd, int sock, void *ssl, const char *buf, int len)
+static uint64_t
+push(int fd, int sock, void *ssl, const char *buf, uint64_t len)
 {
-	int	n, sent;
+	uint64_t	sent;
+	int		n;
 
 	sent = 0;
 	while (sent < len) {
@@ -810,6 +812,13 @@ mg_printf(struct mg_connection *conn, const char *fmt, ...)
 	va_end(ap);
 
 	return (mg_write(conn, buf, len));
+}
+
+static uint64_t
+get_content_length(const struct mg_connection *conn)
+{
+	const char *cl = mg_get_header(conn, "Content-Length");
+	return (cl == NULL ? ~0ULL : strtoull(cl, NULL, 10));
 }
 
 static int
@@ -921,7 +930,7 @@ get_request_len(const char *buf, size_t buflen)
 	const char	*s, *e;
 	int		len = 0;
 
-	for (s = buf, e = s + buflen - 1; len == 0 && s < e; s++)
+	for (s = buf, e = s + buflen - 1; len <= 0 && s < e; s++)
 		/* Control characters are not allowed but >=128 is. */
 		if (!isprint(* (unsigned char *) s) && *s != '\r' &&
 		    *s != '\n' && * (unsigned char *) s < 128)
@@ -1693,23 +1702,24 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 	(void) mg_snprintf(etag, sizeof(etag), "%lx.%lx",
 	    (unsigned long) stp->st_mtime, (unsigned long) stp->st_size);
 
-	mg_printf(conn,
+	/* Since we send Content-Length, we can keep the connection alive */
+	conn->keep_alive = does_client_want_keep_alive(conn);
+
+	(void) mg_printf(conn,
 	    "HTTP/1.1 %d %s\r\n"
 	    "Date: %s\r\n"
 	    "Last-Modified: %s\r\n"
 	    "Etag: \"%s\"\r\n"
 	    "Content-Type: %s\r\n"
 	    "Content-Length: %llu\r\n"
-	    "Connection: keep-alive\r\n"
+	    "Connection: %s\r\n"
 	    "Accept-Ranges: bytes\r\n"
 	    "%s\r\n",
-	    conn->status, msg, date, lm, etag, mime_type, cl, range);
+	    conn->status, msg, date, lm, etag, mime_type, cl,
+	    conn->keep_alive ? "keep-alive" : "close", range);
 
 	send_opened_file_stream(conn, fp, cl);
 	(void) fclose(fp);
-
-	/* Since we have sent Content-Length, keep the connection alive */
-	conn->keep_alive = does_client_want_keep_alive(conn);
 }
 
 static void
@@ -1844,22 +1854,22 @@ not_modified(const struct mg_connection *conn, const struct stat *stp)
 }
 
 #if !(defined(NO_AUTH) && defined(NO_CGI))
-static int
-send_to_a_file(struct mg_connection *conn, int len, int fd)
+static uint64_t
+send_to_a_file(struct mg_connection *conn, uint64_t len, int fd)
 {
 	char	buf[BUFSIZ];
 	int	to_read, nread;
 
 	while (len > 0) {
 		to_read = sizeof(buf);
-		if (to_read > len)
+		if ((uint64_t) to_read > len)
 			to_read = len;
 		nread = pull(-1, conn->sock, conn->ssl, buf, to_read);
 		if (nread <= 0) {
 			cry("%s: Unexpected EOF: %s",
 			    __func__, strerror(ERRNO));
 			break;
-		} else if (push(fd, -1, NULL, buf, nread) != nread) {
+		} else if (push(fd, -1, NULL, buf, nread) != (uint64_t) nread) {
 			cry("%s: write(%d): %s",
 			    __func__, nread, strerror(ERRNO));
 			break;
@@ -1874,7 +1884,7 @@ static bool_t
 send_request_body_to_a_file(struct mg_connection *conn, int fd)
 {
 	const char	*cl, *expect;
-	int		content_len, already_read;
+	uint64_t	content_len, already_read;
 	bool_t		success_code = FALSE;
 
 	cl = mg_get_header(conn, "Content-Length");
@@ -1885,14 +1895,16 @@ send_request_body_to_a_file(struct mg_connection *conn, int fd)
 	} else if (expect != NULL && mg_strcasecmp(expect, "100-continue")) {
 		send_error(conn, 417, "Expectation Failed", "");
 	} else {
-		content_len = atoi(cl);
+		content_len = get_content_length(conn);
 		already_read = conn->request_info.post_data_len;
-		if (already_read >= content_len) {
+		if (content_len <= already_read) {
 			if (push(fd, -1, NULL, conn->request_info.post_data,
 			    content_len) == content_len)
 				success_code = TRUE;
 			conn->request_info.post_data_len = content_len;
+			conn->num_bytes_used = content_len;
 		} else {
+			conn->num_bytes_used = already_read;
 			(void) push(fd, -1, NULL,
 			    conn->request_info.post_data, already_read);
 			content_len -= already_read;
@@ -2862,24 +2874,36 @@ close_connection(struct mg_connection *conn)
 }
 
 static void
+reset_connection_attributes(struct mg_connection *conn)
+{
+	(void) memset(&conn->request_info, 0, sizeof(conn->request_info));
+	conn->status = -1;
+	conn->free_post_data = FALSE;
+	conn->keep_alive = FALSE;
+	conn->num_bytes_used = 0;
+	conn->num_bytes_sent = 0;
+}
+
+static void
 process_new_connection(struct mg_connection *conn)
 {
 	struct mg_request_info *ri = &conn->request_info;
-	char	buf[MAX_REQUEST_SIZE];
-	int	request_len, nread;
+	char		buf[MAX_REQUEST_SIZE];
+	int		request_len, nread;
 
 	nread = 0;
 	do {
-		conn->keep_alive = FALSE;
-		request_len = read_request(-1, conn->sock, conn->ssl,
-		    buf, sizeof(buf), &nread);
+		/* If next request is not pipelined, read it in */
+		if ((request_len = get_request_len(buf, nread)) == 0)
+			request_len = read_request(-1, conn->sock, conn->ssl,
+			    buf, sizeof(buf), &nread);
 		assert(nread >= request_len);
 
-		if (request_len > 0) {
+		reset_connection_attributes(conn);
+
+		/* 0-terminate the request: parse_request uses sscanf */
+		if (request_len > 0)
 			buf[request_len - 1] = '\0';
-			ri->post_data = buf + request_len;
-			ri->post_data_len = nread - request_len;
-		}
 
 		if (request_len > 0 && parse_request(buf, ri, &conn->rsa)) {
 			if (ri->http_version_major != 1 ||
@@ -2891,15 +2915,21 @@ process_new_connection(struct mg_connection *conn)
 				    "%s", "Weird HTTP version");
 				log_access(conn);
 			} else {
+				ri->post_data = buf + request_len;
+				ri->post_data_len = nread - request_len;
 				analyze_request(conn);
-				/* Move next request data to the beginning */
-				nread -= request_len + ri->post_data_len;
-				(void) memmove(buf, buf + request_len +
-				    ri->post_data_len, nread);
 				log_access(conn);
+
+				/* Move next request data to the beginning */
+				nread -= request_len + conn->num_bytes_used;
+				assert(nread >= 0);
+				assert(request_len + conn->num_bytes_used <=
+				    (int) sizeof(buf));
+				(void) memmove(buf, buf + request_len +
+				    conn->num_bytes_used, nread);
 			}
 		} else {
-			/* Do not log garbage in the access log */
+			/* Do not put garbage in the access log */
 			send_error(conn, 400, "Bad Request",
 			    "Can not parse request: [%.*s]", nread, buf);
 		}

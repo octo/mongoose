@@ -36,7 +36,7 @@ sub get_num_of_log_entries {
 
 # Send the request to the 127.0.0.1:$port and return the reply
 sub req {
-	my ($request, $do_not_log) = @_;
+	my ($request, $inc) = @_;
 	my $sock = IO::Socket::INET->new(Proto=>"tcp",
 		PeerAddr=>'127.0.0.1', PeerPort=>$port);
 	fail("Cannot connect: $!") unless $sock;
@@ -51,11 +51,15 @@ sub req {
 		last if $cl and $tl >= $cl;
 	};
 	close $sock;
-	$num_requests++ unless $do_not_log;
+	if (defined($inc)) {
+		$num_requests += $inc;
+	} else {
+		$num_requests++;
+	}
 	my $num_logs = get_num_of_log_entries();
 
 	unless ($num_requests == $num_logs) {
-		#print read_file('access.log');
+		print read_file('access.log');
 		fail("Request has not been logged: [$request]")
 	}
 
@@ -64,8 +68,8 @@ sub req {
 
 # Send the request. Compare with the expected reply. Fail if no match
 sub o {
-	my ($request, $expected_reply, $message, $dont_log) = @_;
-	my $reply = req($request, $dont_log);
+	my ($request, $expected_reply, $message, $num_logs) = @_;
+	my $reply = req($request, $num_logs);
 	fail("$message ($reply)") unless $reply =~ /$expected_reply/s;
 	print "PASS: $message\n";
 }
@@ -116,16 +120,16 @@ spawn("$exe -ports $port -access_log access.log -error_log debug.log ".
 		"-aliases $alias -auth_PUT passfile");
 
 # Try to overflow: Send very long request
-req('POST ' . '/..' x 100 . 'ABCD' x 3000 . "\n\n", 1); # don't log this one
+req('POST ' . '/..' x 100 . 'ABCD' x 3000 . "\n\n", 0); # don't log this one
 
 o("GET /hello.txt HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'GET regular file');
 o("GET /%68%65%6c%6c%6f%2e%74%78%74 HTTP/1.0\n\n",
 	'HTTP/1.1 200 OK', 'URL-decoding');
 
 # Test HTTP version parsing
-o("GET / HTTPX/1.0\r\n\r\n", '400 Bad Request', 'Bad HTTP Version', 1);
-o("GET / HTTP/x.1\r\n\r\n", '400 Bad Request', 'Bad HTTP maj Version', 1);
-o("GET / HTTP/1.1z\r\n\r\n", '400 Bad Request', 'Bad HTTP min Version', 1);
+o("GET / HTTPX/1.0\r\n\r\n", '400 Bad Request', 'Bad HTTP Version', 0);
+o("GET / HTTP/x.1\r\n\r\n", '400 Bad Request', 'Bad HTTP maj Version', 0);
+o("GET / HTTP/1.1z\r\n\r\n", '400 Bad Request', 'Bad HTTP min Version', 0);
 o("GET / HTTP/02.0\r\n\r\n", '505 HTTP version not supported',
 	'HTTP Version >1.1');
 
@@ -137,6 +141,9 @@ open FD, ">$dir/index.html"; print FD "tralala"; close FD;
 o("GET /$dir/ HTTP/1.0\n\n", 'tralala', 'Index substitution');
 o("GET /ta/ HTTP/1.0\n\n", 'Modified', 'Aliases');
 o("GET /not-exist HTTP/1.0\r\n\n", 'HTTP/1.1 404', 'Not existent file');
+o("GET /hello.txt HTTP/1.1\n\nGET /hello.txt HTTP/1.0\n\n",
+	'HTTP/1.1 200.+keep-alive', 'Request pipelining', 2);
+
 
 my $mime_types = {
 	html => 'text/html',
