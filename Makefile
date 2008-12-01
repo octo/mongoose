@@ -1,4 +1,5 @@
 PROG=	mongoose
+SRCS=	main.c mongoose.c
 COPT=	-W -Wall -std=c99 -pedantic -Os
 
 # Possible flags: (in brackets are rough numbers for 'gcc -O2' on i386)
@@ -15,10 +16,10 @@ all:
 	@echo "make (linux|bsd|windows|rtems)"
 
 linux:
-	$(CC) $(COPT) $(CFLAGS) main.c mongoose.c -ldl -lpthread -o $(PROG)
+	$(CC) $(COPT) -D_BSD_SOURCE $(CFLAGS) $(SRCS) -ldl -lpthread -o $(PROG)
 
 bsd:
-	$(CC) $(COPT) $(CFLAGS) main.c mongoose.c -lpthread -o $(PROG)
+	$(CC) $(COPT) $(CFLAGS) $(SRCS) -lpthread -o $(PROG)
 
 rtems:
 	$(CC) -c $(COPT) $(CFLAGS) mongoose.c compat_rtems.c
@@ -26,7 +27,7 @@ rtems:
 
 windows:
 	cl /MD /TC /nologo /DNDEBUG /Os \
-		main.c mongoose.c /link /out:$(PROG).exe \
+		$(SRCS) /link /out:$(PROG).exe \
 		ws2_32.lib user32.lib advapi32.lib shell32.lib
 
 man:
