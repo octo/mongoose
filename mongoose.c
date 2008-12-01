@@ -230,7 +230,7 @@ struct listener {
 struct callback {
 	enum mg_bind_target	bind_target;
 	const char		*regex;
-	mg_callback_t	func;
+	mg_callback_t		func;
 };
 
 /*
@@ -257,7 +257,7 @@ struct mg_context {
 
 struct mg_connection {
 	struct mg_request_info	request_info;
-	struct mg_context	*ctx;	/* Mongoose context we belong to*/
+	struct mg_context *ctx;		/* Mongoose context we belong to*/
 	void		*ssl;		/* SSL descriptor		*/
 	int		sock;		/* Connected socket		*/
 	struct usa	rsa;		/* Remote socket address	*/
@@ -265,10 +265,9 @@ struct mg_connection {
 	time_t		birth_time;	/* Time connection was accepted	*/
 	int		status;		/* Status code			*/
 	bool_t		free_post_data;	/* post_data was malloc-ed	*/
+	bool_t		keep_alive;	/* post_data was malloc-ed	*/
 	uint64_t	num_bytes_sent;	/* Total bytes sent to client	*/
 };
-
-static int mg_socketpair(int sp[2]);
 
 /*
  * In Mongoose, list of values are represented as comma separated
@@ -469,6 +468,54 @@ match_extension(const char *path, const char *ext_list)
 	return (FALSE);
 }
 
+/*
+ * Send error message back to a client.
+ */
+static void
+send_error(struct mg_connection *conn, int status, const char *reason,
+		const char *fmt, ...)
+{
+	char	buf[BUFSIZ];
+	va_list	ap;
+	int	len;
+
+#if 0
+	struct llhead		*lp;
+	struct error_handler	*e;
+	LL_FOREACH(&c->ctx->error_handlers, lp) {
+		e = LL_ENTRY(lp, struct error_handler, link);
+
+		if (e->code == status) {
+			if (c->loc.io_class != NULL &&
+			    c->loc.io_class->close != NULL)
+				c->loc.io_class->close(&c->loc);
+			io_clear(&c->loc.io);
+#if 0
+			setup_embedded_stream(c,
+			    e->callback, e->callback_data);
+#endif
+			return;
+		}
+	}
+#endif
+
+	(void) mg_printf(conn,
+	    "HTTP/1.1 %d %s\r\n"
+	    "Content-Type: text/plain\r\n"
+	    "Connection: close\r\n"
+	    "\r\n", status, reason);
+
+	conn->num_bytes_sent += mg_printf(conn,
+	    "Error %d: %s\n", status, reason);
+
+	va_start(ap, fmt);
+	len = mg_vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+
+	conn->num_bytes_sent += mg_write(conn, buf, len);
+	conn->status = status;
+}
+
 #ifdef _WIN32
 
 #define	stat(x,y)	_stat(x, y)
@@ -554,7 +601,7 @@ start_thread(void * (*func)(void *), void *param)
 
 static int
 spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
-		char *envp[], int sock, const char *dir)
+		char *envp[], int *io, const char *dir)
 {
 	HANDLE	a[2], b[2], h[2], me;
 	DWORD	flags;
@@ -651,11 +698,11 @@ start_thread(void * (*func)(void *), void *param)
 }
 
 #ifndef NO_CGI
-static int
+static bool_t
 spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
-		char *envp[], int sock, const char *dir)
+		char *envp[], int fd_stdin, int fd_stdout, const char *dir)
 {
-	int		ret;
+	int		ret = FALSE;
 	pid_t		pid;
 	const char	*interp = conn->ctx->options[OPT_CGI_INTERPRETER];
 
@@ -664,36 +711,34 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	if ((pid = vfork()) == -1) {
 		/* Parent */
 		ret = -1;
-		cry("fork: %s", strerror(errno));
+		send_error(conn, 500, http_500_error,
+		    "fork(): %s", strerror(ERRNO));
 	} else if (pid == 0) {
 		/* Child */
 		(void) chdir(dir);
-		(void) dup2(sock, 0);
-		(void) dup2(sock, 1);
-		(void) closesocket(sock);
+		(void) dup2(fd_stdin, 0);
+		(void) dup2(fd_stdout, 1);
 
 		/* If error file is specified, send errors there */
-		if (conn->ctx->error_log)
-			(void) dup2(fileno(conn->ctx->error_log), 2);
+		if (error_log != NULL)
+			(void) dup2(fileno(error_log), 2);
 
 		/* Execute CGI program */
 		if (interp == NULL) {
 			(void) execle(prog, prog, NULL, envp);
-			cry("redirect: exec(%s)", prog);
+			send_error(conn, 500, http_500_error,
+			    "execle(%s): %s", prog, strerror(ERRNO));
 		} else {
 			(void) execle(interp, interp, prog, NULL, envp);
-			cry("redirect: exec(%s %s)",
-			    interp, prog);
+			send_error(conn, 500, http_500_error,
+			    "execle(%s %s): %s", interp, prog, strerror(ERRNO));
 		}
-
-		/* UNREACHED */
 		exit(EXIT_FAILURE);
-
 	} else {
-
 		/* Parent */
-		ret = 0;
-		(void) closesocket(sock);
+		(void) close(fd_stdin);
+		(void) close(fd_stdout);
+		ret = TRUE;
 	}
 
 	return (ret);
@@ -702,14 +747,17 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 #endif /* _WIN32 */
 
 static int
-push(int sock, void *ssl, const char *buf, int len)
+push(int fd, int sock, void *ssl, const char *buf, int len)
 {
 	int	n, sent;
 
-	for (sent = 0; sent < len; sent += n) {
+	sent = 0;
+	while (sent < len) {
 
 		if (ssl != NULL) {
 			n = SSL_write(ssl, buf + sent, len - sent);
+		} else if (fd != -1) {
+			n = write(fd, buf + sent, len - sent);
 		} else {
 			n = send(sock, buf + sent, len - sent, 0);
 		}
@@ -726,12 +774,14 @@ push(int sock, void *ssl, const char *buf, int len)
 }
 
 static int
-pull(int sock, void *ssl, char *buf, int len)
+pull(int fd, int sock, void *ssl, char *buf, int len)
 {
 	int	nread;
 
 	if (ssl != NULL) {
 		nread = SSL_read(ssl, buf, len);
+	} else if (fd != -1) {
+		nread = read(fd, buf, len);
 	} else {
 		nread = recv(sock, buf, len, 0);
 	}
@@ -745,7 +795,7 @@ pull(int sock, void *ssl, char *buf, int len)
 int
 mg_write(struct mg_connection *conn, const void *buf, int len)
 {
-	return (push(conn->sock, conn->ssl, buf, len));
+	return (push(-1, conn->sock, conn->ssl, buf, len));
 }
 
 int
@@ -883,51 +933,6 @@ get_request_len(const char *buf, size_t buflen)
 			len = s - buf + 3;
 
 	return (len);
-}
-
-/*
- * Send error message back to a client.
- */
-static void
-send_error(struct mg_connection *conn, int status, const char *reason,
-		const char *fmt, ...)
-{
-	char	buf[BUFSIZ];
-	va_list	ap;
-	int	len;
-
-#if 0
-	struct llhead		*lp;
-	struct error_handler	*e;
-	LL_FOREACH(&c->ctx->error_handlers, lp) {
-		e = LL_ENTRY(lp, struct error_handler, link);
-
-		if (e->code == status) {
-			if (c->loc.io_class != NULL &&
-			    c->loc.io_class->close != NULL)
-				c->loc.io_class->close(&c->loc);
-			io_clear(&c->loc.io);
-#if 0
-			setup_embedded_stream(c,
-			    e->callback, e->callback_data);
-#endif
-			return;
-		}
-	}
-#endif
-
-	(void) mg_printf(conn,
-	    "HTTP/1.1 %d %s\r\n"
-	    "Content-Type: text/plain\r\n"
-	    "Connection: close\r\n"
-	    "\r\n", status, reason);
-
-	va_start(ap, fmt);
-	len = mg_snprintf(buf, sizeof(buf), fmt, ap);
-	va_end(ap);
-
-	conn->num_bytes_sent += mg_write(conn, buf, len);
-	conn->status = status;
 }
 
 /*
@@ -1552,8 +1557,18 @@ is_authorized_for_put(struct mg_connection *conn)
 
 	return (ret);
 }
-
 #endif /* NO_AUTH */
+
+static bool_t
+does_client_want_keep_alive(const struct mg_connection *conn)
+{
+	const char *value = mg_get_header(conn, "Connection");
+
+	/* HTTP/1.1 assumes keep-alive, if Connection header is not set */
+	return ((value == NULL && conn->request_info.http_version_major == 1 &&
+	    conn->request_info.http_version_minor == 1) || (value != NULL &&
+	    !mg_strcasecmp(value, "keep-alive")));
+}
 
 static void
 send_directory(struct mg_connection *conn, const char *path)
@@ -1569,10 +1584,12 @@ send_directory(struct mg_connection *conn, const char *path)
 		return;
 	}
 
-	(void) mg_printf(conn,
+	(void) mg_printf(conn, "%s",
 	    "HTTP/1.1 200 OK\r\n"
 	    "Connection: close\r\n"
-	    "Content-Type: text/html; charset=utf-8\r\n\r\n"
+	    "Content-Type: text/html; charset=utf-8\r\n\r\n");
+
+	conn->num_bytes_sent += mg_printf(conn,
 	    "<html><head><title>Index of %s</title>"
 	    "<style>th {text-align: left;}</style></head>"
 	    "<body><h1>Index of %s</h1><pre><table cellpadding=\"0\">"
@@ -1607,14 +1624,15 @@ send_directory(struct mg_connection *conn, const char *path)
 		}
 		(void) strftime(mod, sizeof(mod), "%d-%b-%Y %H:%M",
 			localtime(&st.st_mtime));
-		(void) mg_printf(conn,
+		conn->num_bytes_sent += mg_printf(conn,
 		    "<tr><td><a href=\"%s%s\">%s%s</a></td>"
 		    "<td>&nbsp;%s</td><td>&nbsp;&nbsp;%s</td></tr>\n",
 		    conn->request_info.uri, dp->d_name, dp->d_name,
 		    S_ISDIR(st.st_mode) ? "/" : "", mod, size);
 	}
 
-	(void) mg_printf(conn, "%s", "</table></body></html>\n");
+	conn->num_bytes_sent += mg_printf(conn, "%s", "</table></body></html>");
+	conn->status = 200;
 }
 
 static void
@@ -1682,12 +1700,16 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 	    "Etag: \"%s\"\r\n"
 	    "Content-Type: %s\r\n"
 	    "Content-Length: %llu\r\n"
+	    "Connection: keep-alive\r\n"
 	    "Accept-Ranges: bytes\r\n"
 	    "%s\r\n",
 	    conn->status, msg, date, lm, etag, mime_type, cl, range);
 
 	send_opened_file_stream(conn, fp, cl);
 	(void) fclose(fp);
+
+	/* Since we have sent Content-Length, keep the connection alive */
+	conn->keep_alive = does_client_want_keep_alive(conn);
 }
 
 static void
@@ -1704,37 +1726,46 @@ parse_headers(char **buf, struct mg_request_info *ri)
 	}
 }
 
-static void
+static bool_t
+is_known_http_method(const char *method)
+{
+	return (!strcmp(method, "GET") || !strcmp(method, "POST") ||
+	    !strcmp(method, "PUT") || !strcmp(method, "DELETE"));
+}
+
+static bool_t
 parse_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
 {
 	char	*http_version;
-	int	n;
+	int	n, success_code = FALSE;
 
 	ri->request_method = skip(&buf, " ");
 	ri->uri = skip(&buf, " ");
-
 	http_version = skip(&buf, "\r\n");
-	if (sscanf(http_version, "HTTP/%d.%d%n",
-	    &ri->http_version_major, &ri->http_version_minor, &n) != 2 ||
-	    http_version[n] != '\0') {
-		cry("%s", http_version);
-		ri->http_version_major = ri->http_version_minor = 0;
-	} else {
+
+	if (is_known_http_method(ri->request_method) &&
+	    ri->uri[0] == '/' &&
+	    sscanf(http_version, "HTTP/%d.%d%n",
+	    &ri->http_version_major, &ri->http_version_minor, &n) == 2 &&
+	    http_version[n] == '\0') {
 		parse_headers(&buf, ri);
 		ri->remote_port = ntohs(usa->u.sin.sin_port);
 		(void) memcpy(&ri->remote_ip, &usa->u.sin.sin_addr.s_addr, 4);
 		ri->remote_ip = ntohl(ri->remote_ip);
+		success_code = TRUE;
 	}
+
+	return (success_code);
 }
 
 static int
-read_request(int sock, void *ssl, char *buf, int buf_size, int *nread)
+read_request(int fd, int sock, void *ssl, char *buf, int buf_size, int *nread)
 {
 	int	n, request_len;
 
-	*nread = request_len = 0;
+	request_len = 0;
 	while (*nread < buf_size && request_len == 0) {
-		n = pull(sock, ssl, buf + *nread, buf_size - *nread);
+		n = pull(fd, sock, ssl, buf + *nread, buf_size - *nread);
 		if (n < 0) {
 			cry("recv(%d): %d", buf_size - *nread, ERRNO);
 			break;
@@ -1811,6 +1842,68 @@ not_modified(const struct mg_connection *conn, const struct stat *stp)
 	const char *ims = mg_get_header(conn, "If-Modified-Since");
 	return (ims != NULL && stp->st_mtime < date_to_epoch(ims));
 }
+
+#if !(defined(NO_AUTH) && defined(NO_CGI))
+static int
+send_to_a_file(struct mg_connection *conn, int len, int fd)
+{
+	char	buf[BUFSIZ];
+	int	to_read, nread;
+
+	while (len > 0) {
+		to_read = sizeof(buf);
+		if (to_read > len)
+			to_read = len;
+		nread = pull(-1, conn->sock, conn->ssl, buf, to_read);
+		if (nread <= 0) {
+			cry("%s: Unexpected EOF: %s",
+			    __func__, strerror(ERRNO));
+			break;
+		} else if (push(fd, -1, NULL, buf, nread) != nread) {
+			cry("%s: write(%d): %s",
+			    __func__, nread, strerror(ERRNO));
+			break;
+		}
+		len -= nread;
+	}
+
+	return (len);
+}
+
+static bool_t
+send_request_body_to_a_file(struct mg_connection *conn, int fd)
+{
+	const char	*cl, *expect;
+	int		content_len, already_read;
+	bool_t		success_code = FALSE;
+
+	cl = mg_get_header(conn, "Content-Length");
+	expect = mg_get_header(conn, "Expect");
+
+	if (expect == NULL && cl == NULL) {
+		send_error(conn, 411, "Length Required", "");
+	} else if (expect != NULL && mg_strcasecmp(expect, "100-continue")) {
+		send_error(conn, 417, "Expectation Failed", "");
+	} else {
+		content_len = atoi(cl);
+		already_read = conn->request_info.post_data_len;
+		if (already_read >= content_len) {
+			if (push(fd, -1, NULL, conn->request_info.post_data,
+			    content_len) == content_len)
+				success_code = TRUE;
+			conn->request_info.post_data_len = content_len;
+		} else {
+			(void) push(fd, -1, NULL,
+			    conn->request_info.post_data, already_read);
+			content_len -= already_read;
+			if (send_to_a_file(conn, content_len, fd) == 0)
+				success_code = TRUE;
+		}
+	}
+
+	return (success_code);
+}
+#endif /* !NO_CGI, NO_AUTH*/
 
 #if !defined(NO_CGI)
 struct cgi_env_block {
@@ -1928,77 +2021,36 @@ prepare_cgi_environment(const struct mg_connection *conn, const char *prog,
 	assert(blk->len < (int) sizeof(blk->buf));
 }
 
-static int
-run_cgi(struct mg_connection *conn, const char *prog)
+static void
+send_cgi(struct mg_connection *conn, const char *prog)
 {
+	int			headers_len, data_len, i, n;
+	const char		*status;
+	char			buf[MAX_REQUEST_SIZE], *pbuf;
+	struct mg_request_info	ri;
 	struct cgi_env_block	blk;
 	char			dir[FILENAME_MAX], *p;
-	int			ret, sp[2];
+	int			fd_stdin[2], fd_stdout[2];
 
 	prepare_cgi_environment(conn, prog, &blk);
-	ret = sp[0] = sp[1] = -1;
 
 	/* CGI must be executed in its own directory */
 	(void) mg_snprintf(dir, sizeof(dir), "%s", prog);
 	if ((p = strrchr(dir, DIRSEP)) != NULL)
 		*p++ = '\0';
 
-	if (mg_socketpair(sp) != 0) {
-	} else if (spawn_process(conn, p, blk.buf, blk.vars, sp[1], dir)) {
-		(void) closesocket(sp[0]);
-		(void) closesocket(sp[1]);
-	} else {
-		ret = sp[0];
+	fd_stdin[0] = fd_stdin[1] = fd_stdout[0] = fd_stdout[1] = -1;
+	if (pipe(fd_stdin) != 0 || pipe(fd_stdout) != 0) {
+		send_error(conn, 500, http_500_error,
+		    "Cannot create CGI pipe: %s", strerror(ERRNO));
+		goto done;
+	} else if (!spawn_process(conn, p, blk.buf, blk.vars,
+	    fd_stdin[0], fd_stdout[1], dir)) {
+		goto done;
+	} else if (!strcmp(conn->request_info.request_method, "POST") &&
+	    !send_request_body_to_a_file(conn, fd_stdin[1])) {
+		goto done;
 	}
-
-	return (ret);
-}
-
-static void
-send_post_data(struct mg_connection *conn, int sock)
-{
-	const char	*cl;
-	char		buf[BUFSIZ];
-	int		content_len, already_read, n;
-
-	cl = mg_get_header(conn, "Content-Length");
-	if (cl == NULL)
-		return;
-
-	content_len = atoi(cl);
-	already_read = conn->request_info.post_data_len;
-	if (already_read >= content_len) {
-		push(sock, NULL, conn->request_info.post_data, content_len);
-		conn->request_info.post_data_len = content_len;
-	} else {
-		push(sock, NULL, conn->request_info.post_data, already_read);
-		content_len -= already_read;
-		while (content_len > 0) {
-			n = pull(conn->sock, conn->ssl, buf, sizeof(buf));
-			if (n <= 0) {
-				break;
-			} else {
-				push(sock, NULL, buf, n);
-				content_len += n;
-			}
-		}
-	}
-}
-
-static void
-send_cgi(struct mg_connection *conn, const char *prog)
-{
-	int		cgi_sock, headers_len, data_len, i, n;
-	const char	*status;
-	char		buf[MAX_REQUEST_SIZE], *pbuf;
-	struct mg_request_info ri;
-
-	cgi_sock = run_cgi(conn, prog);
-	if (cgi_sock == -1) {
-		send_error(conn, 500, "Error running CGI", "");
-		return;
-	}
-	send_post_data(conn, cgi_sock);
 
 	/*
 	 * Now read CGI reply into a buffer. We need to set correct
@@ -2006,12 +2058,14 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	 * Do not send anything back to client, until we see all
 	 * HTTP headers.
 	 */
-	headers_len = read_request(cgi_sock, NULL, buf, sizeof(buf), &data_len);
-	if (headers_len < 0) {
+	data_len = 0;
+	headers_len = read_request(fd_stdout[0], -1, NULL,
+	    buf, sizeof(buf), &data_len);
+	if (headers_len <= 0) {
 		send_error(conn, 500, http_500_error,
 		    "CGI program sent malformed HTTP headers: [%.*s]",
 		    data_len, buf);
-		return;
+		goto done;
 	}
 	pbuf = buf;
 	buf[headers_len - 1] = '\0';
@@ -2032,8 +2086,14 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	/* Send headers, and the rest of the data */
 	conn->num_bytes_sent += mg_write(conn,
 	    buf + headers_len, data_len - headers_len);
-	while ((n = pull(cgi_sock, NULL, buf, sizeof(buf))) > 0)
+	while ((n = pull(fd_stdout[0], -1, NULL, buf, sizeof(buf))) > 0)
 		conn->num_bytes_sent += mg_write(conn, buf, n);
+
+done:
+	if (fd_stdin[0] != -1) (void) close(fd_stdin[0]);
+	if (fd_stdin[1] != -1) (void) close(fd_stdin[1]);
+	if (fd_stdout[0] != -1) (void) close(fd_stdout[0]);
+	if (fd_stdout[1] != -1) (void) close(fd_stdout[1]);
 }
 #endif /* !NO_CGI */
 
@@ -2072,15 +2132,9 @@ static void
 put_file(struct mg_connection *conn, const char *path)
 {
 	struct stat	st;
-	int		rc, n;
-	FILE		*fp;
-	char		buf[BUFSIZ];
-	const char	*cl, *expect;
-	uint64_t	len;
+	int		rc, fd;
 
 	conn->status = stat(path, &st) == 0 ? 200 : 201;
-	cl = mg_get_header(conn, "Content-Length");
-	expect = mg_get_header(conn, "Expect");
 
 	if (mg_get_header(conn, "Range")) {
 		send_error(conn, 501, "Not Implemented",
@@ -2090,41 +2144,13 @@ put_file(struct mg_connection *conn, const char *path)
 	} else if (rc == -1) {
 		send_error(conn, 500, http_500_error,
 		    "put_dir(%s): %s", path, strerror(ERRNO));
-	} else if (expect != NULL && !mg_strcasecmp(expect, "100-continue")) {
-		send_error(conn, 417, "Expectation Failed",
-		    "%s", "No chunked transfers please");
-	} else if (cl == NULL) {
-		send_error(conn, 411, "Length Required", "");
-	} else if ((fp = fopen(path, "wb+")) == NULL) {
+	} else if ((fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644)) == -1) {
 		send_error(conn, 500, http_500_error,
-		    "fopen(%s, wb+): %s", path, strerror(ERRNO));
+		    "open(%s): %s", path, strerror(ERRNO));
 	} else {
-		len = strtoul(cl, NULL, 10);
-		n = conn->request_info.post_data_len;
-		if ((uint64_t) n > len)
-			n = len;
-		if (n > 0) {
-			(void) fwrite(conn->request_info.post_data, n, 1, fp);
-			len -= n;
-		}
-		while (len > 0) {
-			n = sizeof(buf);
-			if ((uint64_t) n > len)
-				n = len;
-			cry("pulling %d of %llu bytes...", n, len);
-			n = pull(conn->sock, conn->ssl, buf, n);
-			cry("pulled %d bytes", n);
-			if (n <= 0) {
-				cry("Unexpected EOF during PUT");
-				break;
-			} else if (fwrite(buf, n, 1, fp) != 1) {
-				cry("PUT error: %s", strerror(ERRNO));
-			}
-		}
-		(void) fclose(fp);
-		if (len != 0)
-			conn->status = 500;
-		send_error(conn, conn->status, "OK", "");
+		if (send_request_body_to_a_file(conn, fd))
+			send_error(conn, conn->status, "OK", "");
+		(void) close(fd);
 	}
 }
 
@@ -2276,7 +2302,7 @@ buffer_in_post_data(struct mg_connection *conn)
 	(void) memcpy((char *) ri->post_data, tmp, already_read);
 	content_len -= already_read;
 	while (content_len > 0) {
-		n = pull(conn->sock, conn->ssl, buf, sizeof(buf));
+		n = pull(-1, conn->sock, conn->ssl, buf, sizeof(buf));
 		if (n <= 0) {
 			break;
 		} else {
@@ -2443,7 +2469,9 @@ log_access(const struct mg_connection *conn)
 	    "%s - %s [%s %+05d] \"%s %s HTTP/%d.%d\" %d %llu",
 	    inet_ntoa(conn->rsa.u.sin.sin_addr),
 	    ri->remote_user == NULL ? "-" : ri->remote_user,
-	    date, tz_offset, ri->request_method, ri->uri,
+	    date, tz_offset,
+	    ri->request_method ? ri->request_method : "-",
+	    ri->uri ? ri->uri : "-",
 	    ri->http_version_major, ri->http_version_minor,
 	    conn->status, conn->num_bytes_sent);
 	log_header(conn, "Referer", conn->ctx->access_log);
@@ -2529,51 +2557,6 @@ mg_fini(struct mg_context *ctx)
 	/* TODO: free SSL context */
 
 	free(ctx);
-}
-
-/*
- * UNIX socketpair() implementation. Why? Because Windows does not have it.
- * Return 0 on success, -1 on error.
- */
-static int
-mg_socketpair(int sp[2])
-{
-	struct sockaddr_in	sa;
-	int			sock, ret = -1;
-	socklen_t		len = sizeof(sa);
-
-	sp[0] = sp[1] = -1;
-
-	(void) memset(&sa, 0, sizeof(sa));
-	sa.sin_family 		= AF_INET;
-	sa.sin_port		= htons(0);
-	sa.sin_addr.s_addr	= htonl(INADDR_LOOPBACK);
-
-	if ((sock = socket(AF_INET, SOCK_STREAM, 0)) != -1 &&
-	    !bind(sock, (struct sockaddr *) &sa, len) &&
-	    !listen(sock, 1) &&
-	    !getsockname(sock, (struct sockaddr *) &sa, &len) &&
-	    (sp[0] = socket(AF_INET, SOCK_STREAM, 6)) != -1 &&
-	    !connect(sp[0], (struct sockaddr *) &sa, len) &&
-	    (sp[1] = accept(sock,(struct sockaddr *) &sa, &len)) != -1) {
-
-		/* Success */
-		ret = 0;
-	} else {
-
-		/* Failure, close descriptors */
-		if (sp[0] != -1)
-			(void) closesocket(sp[0]);
-		if (sp[1] != -1)
-			(void) closesocket(sp[1]);
-	}
-
-	(void) closesocket(sock);
-
-	set_close_on_exec(sp[0]);
-	set_close_on_exec(sp[1]);
-
-	return (ret);
 }
 
 static bool_t
@@ -2881,34 +2864,47 @@ close_connection(struct mg_connection *conn)
 static void
 process_new_connection(struct mg_connection *conn)
 {
+	struct mg_request_info *ri = &conn->request_info;
 	char	buf[MAX_REQUEST_SIZE];
-	int	request_len, n;
+	int	request_len, nread;
 
-	request_len = read_request(conn->sock, conn->ssl, buf, sizeof(buf), &n);
-	assert(n >= request_len);
-	if (request_len > 0) {
-		buf[request_len - 1] = '\0';
-		conn->request_info.post_data = buf + request_len;
-		conn->request_info.post_data_len = n - request_len;
-		parse_request(buf, &conn->request_info, &conn->rsa);
-		if (conn->request_info.http_version_minor == 0 &&
-		    conn->request_info.http_version_major == 0) {
-			send_error(conn, 400, "Bad HTTP version",
-			    "Bad HTTP version sent");
-		} else if (conn->request_info.http_version_major != 1 ||
-		     (conn->request_info.http_version_major == 1 &&
-		     (conn->request_info.http_version_minor < 0 ||
-		     conn->request_info.http_version_minor > 1))) {
-			send_error(conn, 505, "HTTP version not supported",
-			    "%s", "Weird HTTP version");
-		} else {
-			analyze_request(conn);
-			log_access(conn);
+	nread = 0;
+	do {
+		conn->keep_alive = FALSE;
+		request_len = read_request(-1, conn->sock, conn->ssl,
+		    buf, sizeof(buf), &nread);
+		assert(nread >= request_len);
+
+		if (request_len > 0) {
+			buf[request_len - 1] = '\0';
+			ri->post_data = buf + request_len;
+			ri->post_data_len = nread - request_len;
 		}
-	} else {
-		send_error(conn, 400, "Bad Request",
-		    "Could not parse request: [%.*s]", n, buf);
-	}
+
+		if (request_len > 0 && parse_request(buf, ri, &conn->rsa)) {
+			if (ri->http_version_major != 1 ||
+			     (ri->http_version_major == 1 &&
+			     (ri->http_version_minor < 0 ||
+			     ri->http_version_minor > 1))) {
+				send_error(conn, 505,
+				    "HTTP version not supported",
+				    "%s", "Weird HTTP version");
+				log_access(conn);
+			} else {
+				analyze_request(conn);
+				/* Move next request data to the beginning */
+				nread -= request_len + ri->post_data_len;
+				(void) memmove(buf, buf + request_len +
+				    ri->post_data_len, nread);
+				log_access(conn);
+			}
+		} else {
+			/* Do not log garbage in the access log */
+			send_error(conn, 400, "Bad Request",
+			    "Can not parse request: [%.*s]", nread, buf);
+		}
+
+	} while (conn->keep_alive);
 
 	close_connection(conn);
 }
