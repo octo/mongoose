@@ -4,7 +4,7 @@
 
 use IO::Socket;
 
-my $port = 9000;
+my $port = 23456;
 my $pid = undef;
 my $num_requests;
 my $dir = 'test_dir';
@@ -29,13 +29,19 @@ sub fail {
 	exit 1;
 }
 
+sub get_num_of_log_entries {
+	open FD, "access.log"; my @logs = (<FD>); close FD;
+	return scalar @logs;
+}
+
 # Send the request to the 127.0.0.1:$port and return the reply
 sub req {
+	my ($request, $do_not_log) = @_;
 	my $sock = IO::Socket::INET->new(Proto=>"tcp",
 		PeerAddr=>'127.0.0.1', PeerPort=>$port);
 	fail("Cannot connect: $!") unless $sock;
 	$sock->autoflush(1);
-	print $sock $_ foreach (split //, $_[0]);
+	print $sock $_ foreach (split //, $request);
 	my ($out, $cl, $tl, $body) = ('', 0, 0, 0);
 	while ($line = <$sock>) {
 		$out .= $line;
@@ -45,14 +51,21 @@ sub req {
 		last if $cl and $tl >= $cl;
 	};
 	close $sock;
-	$num_requests++;
+	$num_requests++ unless $do_not_log;
+	my $num_logs = get_num_of_log_entries();
+
+	unless ($num_requests == $num_logs) {
+		#print read_file('access.log');
+		fail("Request has not been logged: [$request]")
+	}
+
 	return $out;
 }
 
 # Send the request. Compare with the expected reply. Fail if no match
 sub o {
-	my ($request, $expected_reply, $message) = @_;
-	my $reply = req($request);
+	my ($request, $expected_reply, $message, $dont_log) = @_;
+	my $reply = req($request, $dont_log);
 	fail("$message ($reply)") unless $reply =~ /$expected_reply/s;
 	print "PASS: $message\n";
 }
@@ -73,7 +86,8 @@ sub read_file {
 	return join '', @lines;
 }
 
-# Delete log files
+####################################################### ENTRY POINT
+
 unlink @files_to_delete;
 
 # Make sure we export only symbols that start with "mg_", and keep local
@@ -102,17 +116,16 @@ spawn("$exe -ports $port -access_log access.log -error_log debug.log ".
 		"-aliases $alias -auth_PUT passfile");
 
 # Try to overflow: Send very long request
-req('POST ' . '/..' x 100 . 'ABCD' x 300 . "\n\n");
-req('POST ' . '/..' x 100 . 'ABCD' x 3000 . "\n\n");
+req('POST ' . '/..' x 100 . 'ABCD' x 3000 . "\n\n", 1); # don't log this one
 
 o("GET /hello.txt HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'GET regular file');
 o("GET /%68%65%6c%6c%6f%2e%74%78%74 HTTP/1.0\n\n",
 	'HTTP/1.1 200 OK', 'URL-decoding');
 
 # Test HTTP version parsing
-o("GET / HTTPX/1.0\r\n\r\n", '400 Bad HTTP version', 'Bad HTTP Version');
-o("GET / HTTP/x.1\r\n\r\n", '400 Bad HTTP version', 'Bad HTTP maj Version');
-o("GET / HTTP/1.1z\r\n\r\n", '400 Bad HTTP version', 'Bad HTTP min Version');
+o("GET / HTTPX/1.0\r\n\r\n", '400 Bad Request', 'Bad HTTP Version', 1);
+o("GET / HTTP/x.1\r\n\r\n", '400 Bad Request', 'Bad HTTP maj Version', 1);
+o("GET / HTTP/1.1z\r\n\r\n", '400 Bad Request', 'Bad HTTP min Version', 1);
 o("GET / HTTP/02.0\r\n\r\n", '505 HTTP version not supported',
 	'HTTP Version >1.1');
 
@@ -139,7 +152,7 @@ foreach my $key (keys %$mime_types) {
 	my $filename = "_mime_file_test.$key";
 	open FD, ">$filename";
 	close FD; 
-	o("GET /$filename HTTP/1.1\n\n",
+	o("GET /$filename HTTP/1.0\n\n",
 		"Content-Type: $mime_types->{$key}", ".$key mime type");
 	unlink $filename;
 }
@@ -177,19 +190,23 @@ unless ($ARGV[0] eq "basic_tests") {
 	o("GET /env.cgi HTTP/1.0\n\r\nSOME_TRAILING_DATA_HERE",
 		'HTTP/1.1 200 OK', 'GET CGI with trailing data');
 
-my $auth_header = "Authorization: Digest  username=guest, ".
-	"realm=mydomain.com, nonce=1145872809, uri=/put.txt, ".
-	"response=896327350763836180c61d87578037d9, qop=auth, ".
-	"nc=00000002, cnonce=53eddd3be4e26a98\n";
+	my $auth_header = "Authorization: Digest  username=guest, ".
+		"realm=mydomain.com, nonce=1145872809, uri=/put.txt, ".
+		"response=896327350763836180c61d87578037d9, qop=auth, ".
+		"nc=00000002, cnonce=53eddd3be4e26a98\n";
 
-o("PUT /put.txt HTTP/1.0\nContent-Length: 7\n$auth_header\n1234567",
-	"HTTP/1.1 201 OK", 'PUT file, status 201');
-fail("PUT content mismatch") unless read_file('put.txt') eq '1234567';
-o("PUT /put.txt HTTP/1.0\nContent-Length: 4\n$auth_header\nabcd",
-	"HTTP/1.1 200 OK", 'PUT file, status 200');
-fail("PUT content mismatch") unless read_file('put.txt') eq 'abcd';
+	o("PUT /put.txt HTTP/1.0\nContent-Length: 7\n$auth_header\n1234567",
+		"HTTP/1.1 201 OK", 'PUT file, status 201');
+	fail("PUT content mismatch") unless read_file('put.txt') eq '1234567';
+	o("PUT /put.txt HTTP/1.0\nContent-Length: 4\n$auth_header\nabcd",
+		"HTTP/1.1 200 OK", 'PUT file, status 200');
+	fail("PUT content mismatch") unless read_file('put.txt') eq 'abcd';
+	o("PUT /put.txt HTTP/1.0\n$auth_header\nabcd",
+		"HTTP/1.1 411 Length Required", 'PUT 411 error');
+	o("PUT /put.txt HTTP/1.0\nExpect: blah\n$auth_header\nabcd",
+		"HTTP/1.1 417 Expectation Failed", 'PUT 417 error');
 
-# Check that CGI's current directory is set to script's directory
+	# Check that CGI's current directory is set to script's directory
 	system("cp env.cgi $dir");
 	o("GET /$dir/env.cgi HTTP/1.0\n\n",
 		"CURRENT_DIR=.*$dir", "CGI chdir()");
@@ -212,10 +229,6 @@ fail("PUT content mismatch") unless read_file('put.txt') eq 'abcd';
 	$content =~ /^b:a:\w+$/gs or fail("Bad content of the passwd file");
 	unlink $path;
 }
-
-# Does log file contain valid number of entries?
-open FD, "access.log"; my @logs = (<FD>); close FD;
-scalar(@logs) == $num_requests or fail("Wrong number of log entries");
 
 # Embedded test
 =begin
