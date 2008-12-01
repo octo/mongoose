@@ -1,7 +1,7 @@
 .\" Process this file with
 .\" groff -man -Tascii mongoose.1
 .\" $Id: mongoose.1,v 1.12 2008/11/29 15:32:42 drozd Exp $
-.Dd Feb 12, 2008
+.Dd Dec 1, 2008
 .Dt mongoose 1
 .Sh NAME
 .Nm mongoose
@@ -15,9 +15,7 @@
 .Sh DESCRIPTION
 .Nm
 is small, fast and easy to use web server with CGI, SSL, Digest Authorization
-support. It can be run as stand-alone server, be managed by
-.Xr inetd 8
-, or be embedded into existing C/C++ application.
+support.
 .Pp
 .Nm
 does not detach from terminal, and makes current working directory
@@ -31,12 +29,11 @@ does not expect CGI scirpts to be put in a special directory. They may be
 anywhere. CGI files are recognized by the file extension.
 .Pp
 SSI files are also recognized by extension. Currently, the only SSI directives
-supported are `<!--#include "url-encoded-path" -->'
-and `<!--#exec "program" -->'. The `url-encoded-path' can be relative to
+supported are <!--#include "path" --> and <!--#exec "shell command" -->. The path can be relative to
 .Nm
-working directory, or absolute system path. In the embedded mode, more
-directives are available: #call, #if/#elif/#endif/#else/#endif.
-Unsupported SSI directives are silently ignored.
+working directory, or be relative to the web root:
+<!--include virtual="path"-->, or be the absolute system path:
+<!--#include file="path">. Unknown SSI directives are silently ignored.
 .Pp
 It is possible to specify multiple ports to listen on. For example, to
 make
@@ -110,8 +107,6 @@ decides which interpreter to use by looking at the first line of CGI script.
 Enable/disable directory listing. Default: "1" (enabled).
 .It Fl error_log Ar file
 Error log file. Default: not set, no errors are logged.
-.It Fl inetd Ar yes|no
-Enable/disable inetd mode. Default: "0" (disabled).
 .It Fl mime_types Ar list
 Additional to builtin mime types, in form "EXTENSION1=TYPE1,EXTENSION2=TYPE2".
 .It Fl ports Ar port_list
@@ -157,8 +152,6 @@ Start listening on port 8080, create an administrative URI "/ctl" where
 options may be changed at runtime, and protect that URI with authorization.
 El
 .Pp
-.Sh SEE ALSO
-.Xr inetd 8 .
 .Sh COPYRIGHT
 .Nm
 is licensed under the terms of MIT license.
