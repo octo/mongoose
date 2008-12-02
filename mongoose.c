@@ -1820,8 +1820,7 @@ read_request(int fd, int sock, void *ssl, char *buf, int buf_size, int *nread)
 	request_len = 0;
 	while (*nread < buf_size && request_len == 0) {
 		n = pull(fd, sock, ssl, buf + *nread, buf_size - *nread);
-		if (n < 0) {
-			cry("recv(%d): %d", buf_size - *nread, ERRNO);
+		if (n <= 0) {
 			break;
 		} else {
 			*nread += n;
@@ -2944,13 +2943,13 @@ reset_connection_attributes(struct mg_connection *conn)
 }
 
 static void
-shift_to_next(struct mg_connection *conn, char *buf, int request_len, int nread)
+shift_to_next(struct mg_connection *conn, char *buf, int req_len, int *nread)
 {
 	uint64_t	cl;
 	int		over_len, body_len;
 
 	cl = get_content_length(conn);
-	over_len = nread - request_len;
+	over_len = *nread - req_len;
 	assert(over_len >= 0);
 
 	if (cl == ~0ULL) {
@@ -2961,16 +2960,16 @@ shift_to_next(struct mg_connection *conn, char *buf, int request_len, int nread)
 		body_len = over_len;
 	}
 
-	nread -= request_len + body_len;
-	(void) memmove(buf, buf + request_len + body_len, nread);
+	*nread -= req_len + body_len;
+	(void) memmove(buf, buf + req_len + body_len, *nread);
 }
 
 static void
 process_new_connection(struct mg_connection *conn)
 {
 	struct mg_request_info *ri = &conn->request_info;
-	char		buf[MAX_REQUEST_SIZE];
-	int		request_len, nread;
+	char	buf[MAX_REQUEST_SIZE];
+	int	request_len, nread;
 
 	nread = 0;
 	do {
@@ -3004,7 +3003,7 @@ process_new_connection(struct mg_connection *conn)
 				ri->post_data_len = nread - request_len;
 				analyze_request(conn);
 				log_access(conn);
-				shift_to_next(conn, buf, request_len, nread);
+				shift_to_next(conn, buf, request_len, &nread);
 			}
 		} else {
 			/* Do not put garbage in the access log */
