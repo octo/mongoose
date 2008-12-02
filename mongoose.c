@@ -1602,6 +1602,7 @@ is_authorized_for_put(struct mg_connection *conn)
 	int	ret = FALSE;
 
 	if ((fp = fopen(conn->ctx->options[OPT_AUTH_PUT], "r")) != NULL) {
+		set_close_on_exec(fileno(fp));
 		ret = authorize(conn, fp);
 		(void) fclose(fp);
 	}
@@ -1724,6 +1725,7 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 		    "fopen(%s): %s", path, strerror(ERRNO));
 		return;
 	}
+	set_close_on_exec(fileno(fp));
 
 	/* If Range: header specified, act accordingly */
 	s = mg_get_header(conn, "Range");
@@ -2200,6 +2202,7 @@ put_file(struct mg_connection *conn, const char *path)
 		send_error(conn, 500, http_500_error,
 		    "open(%s): %s", path, strerror(ERRNO));
 	} else {
+		set_close_on_exec(fd);
 		if (send_request_body_to_a_file(conn, fd))
 			send_error(conn, conn->status, "OK", "");
 		(void) close(fd);
@@ -2231,6 +2234,7 @@ do_ssi_include(struct mg_connection *conn, char *tag)
 	if ((fp = fopen(path, "rb")) == NULL) {
 		cry("Cannot open SSI #include: [%s]: %s", tag, strerror(ERRNO));
 	} else {
+		set_close_on_exec(fileno(fp));
 		send_opened_file_stream(conn, fp, ~0);
 		(void) fclose(fp);
 	}
@@ -2320,6 +2324,7 @@ send_ssi(struct mg_connection *conn, const char *path)
 		send_error(conn, 500, http_500_error,
 		    "fopen(%s): %s", path, strerror(ERRNO));
 	} else {
+		set_close_on_exec(fileno(fp));
 		(void) mg_printf(conn, "%s", "HTTP/1.1 200 OK\r\n"
 		    "Content-Type: text/html\r\nConnection: close\r\n\r\n");
 		send_ssi_file(conn, path, fp);
@@ -2696,6 +2701,8 @@ open_log_file(FILE **fpp, const char *path)
 		cry("cannot open log file %s: %s",
 		    path, strerror(errno));
 		retval = FALSE;
+	} else {
+		set_close_on_exec(fileno(*fpp));
 	}
 
 	return (retval);
