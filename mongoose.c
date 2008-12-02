@@ -2593,6 +2593,7 @@ set_uid_option(struct mg_context *ctx, const char *uid)
 	return (retval);
 }
 
+#if !defined(NO_SSL)
 /*
  * Dynamically load SSL library. Set up ctx->ssl_ctx pointer.
  */
@@ -2639,6 +2640,7 @@ set_ssl_option(struct mg_context *ctx, const char *pem)
 
 	return (retval);
 }
+#endif /* !NO_SSL */
 
 static bool_t
 open_log_file(FILE **fpp, const char *path)
@@ -2738,16 +2740,18 @@ set_admin_uri_option(struct mg_context *ctx, const char *uri)
 static const struct mg_option known_options[] = {
 	{"root", "\tWeb root directory", "."},
 	{"index_files",	"Index files", "index.html,index.htm,index.cgi"},
+#if !defined(NO_SSL)
 	{"ssl_cert", "SSL certificate file", NULL},
+#endif /* !NO_SSL */
 	{"ports", "Listening ports", NULL},
 	{"dir_list", "Directory listing", "yes"},
 	{"protect", "URI to htpasswd mapping", NULL},
-#ifndef NO_CGI
+#if !defined(NO_CGI)
 	{"cgi_ext", "CGI extensions", "cgi,pl,php"},
 	{"cgi_interp", "CGI interpreter to use with all CGI scripts", NULL},
 #endif /* NO_CGI */
 	{"ssi_ext", "SSI extensions", "shtml,shtm"},
-#ifndef NO_AUTH
+#if !defined(NO_AUTH)
 	{"auth_realm", "Authentication domain name", "mydomain.com"},
 	{"auth_gpass", "Global passwords file", NULL},
 	{"auth_PUT", "PUT,DELETE auth file", NULL},
@@ -2772,16 +2776,18 @@ static const struct option_setter {
 } setters[] = {
 	{OPT_ROOT,		NULL},
 	{OPT_INDEX_FILES,	NULL},
+#if !defined(NO_SSL)
 	{OPT_SSL_CERTIFICATE,	&set_ssl_option},
+#endif /* !NO_SSL */
 	{OPT_PORTS,		&set_ports_option},
 	{OPT_DIR_LIST,		NULL},
 	{OPT_PROTECT,		NULL},
-#ifndef NO_CGI
+#if !defined(NO_CGI)
 	{OPT_CGI_EXTENSIONS,	NULL},
 	{OPT_CGI_INTERPRETER,	NULL},
 #endif /* NO_CGI */
 	{OPT_SSI_EXTENSIONS,	NULL},
-#ifndef NO_AUTH
+#if !defined(NO_AUTH)
 	{OPT_AUTH_DOMAIN,	NULL},
 	{OPT_AUTH_GPASSWD,	&set_gpass_option},
 	{OPT_AUTH_PUT,		NULL},
