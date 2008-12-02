@@ -111,12 +111,14 @@ typedef struct DIR {
 #include <dirent.h>
 #include <dlfcn.h>
 #include <pthread.h>
-#define	SSL_LIB				"libssl.so"
-#define	DIRSEP				'/'
-#define	IS_DIRSEP_CHAR(c)		((c) == '/')
-#define	O_BINARY			0
-#define	closesocket(a)			close(a)
-#define	ERRNO				errno
+#define	SSL_LIB			"libssl.so"
+#define	DIRSEP			'/'
+#define	IS_DIRSEP_CHAR(c)	((c) == '/')
+#define	O_BINARY		0
+#define	closesocket(a)		close(a)
+#define	ERRNO			errno
+#define	INVALID_SOCKET		(-1)
+
 #endif /* End of Windows and UNIX specific includes */
 
 #include "mongoose.h"
@@ -938,33 +940,27 @@ mg_open_listening_port(int port)
 	int		sock, on = 1;
 	struct usa	sa;
 
-#ifdef _WIN32
-	{WSADATA data;	WSAStartup(MAKEWORD(2,2), &data);}
-#endif /* _WIN32 */
-
 	sa.len				= sizeof(sa.u.sin);
 	sa.u.sin.sin_family		= AF_INET;
 	sa.u.sin.sin_port		= htons((uint16_t) port);
 	sa.u.sin.sin_addr.s_addr	= htonl(INADDR_ANY);
 
-	if ((sock = socket(PF_INET, SOCK_STREAM, 6)) == -1)
-		goto fail;
-	if (setsockopt(sock, SOL_SOCKET,
-	    SO_REUSEADDR,(char *) &on, sizeof(on)) != 0)
-		goto fail;
-	if (bind(sock, &sa.u.sa, sa.len) < 0)
-		goto fail;
-	if (listen(sock, 128) != 0)
-		goto fail;
-
-	set_close_on_exec(sock);
+	if ((sock = socket(PF_INET, SOCK_STREAM, 6)) != INVALID_SOCKET &&
+	    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+	    (char *) &on, sizeof(on)) == 0 &&
+	    bind(sock, &sa.u.sa, sa.len) == 0 &&
+	    listen(sock, 128) == 0) {
+		/* Success */
+		set_close_on_exec(sock);
+	} else {
+		/* Error */
+		cry("open_listening_port(%d): %s", port, strerror(errno));
+		if (sock != INVALID_SOCKET)
+			(void) closesocket(sock);
+		sock = INVALID_SOCKET;
+	}
 
 	return (sock);
-fail:
-	if (sock != -1)
-		(void) closesocket(sock);
-	cry("open_listening_port(%d): %s", port, strerror(errno));
-	return (-1);
 }
 
 /*
