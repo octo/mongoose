@@ -11,15 +11,16 @@ my $dir = 'test_dir';
 my $alias = "/aliased=/etc/,/ta=$dir";
 my $config = '../mongoose.conf';
 my $exe = '../mongoose';
+my $embed_exe = 'embed';
 my $exit_code = 0;
 
 my @files_to_delete = ('debug.log', 'access.log', $config, 'put.txt',
-	"$dir/index.html", "$dir/env.cgi", 'binary_file');
+	"$dir/index.html", "$dir/env.cgi", 'binary_file', $embed_exe);
 
 END {
 	unlink @files_to_delete;
 	rmdir $dir;
-	kill(9, $pid) && waitpid($pid, 0) if defined($pid);
+	kill_spawned_child();
 	exit $exit_code;
 }
 
@@ -90,6 +91,10 @@ sub read_file {
 	return join '', @lines;
 }
 
+sub kill_spawned_child {
+	kill(9, $pid) && waitpid($pid, 0) if defined($pid);
+}
+
 ####################################################### ENTRY POINT
 
 unlink @files_to_delete;
@@ -113,7 +118,7 @@ $port = 12345;
 o("GET /hello.txt HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'Loading config file');
 $port = $saved_port;
 unlink $config;
-kill(9, $pid) && waitpid($pid, 0) if defined($pid);
+kill_spawned_child();
 
 # Spawn the server on port $port
 spawn("$exe -ports $port -access_log access.log -error_log debug.log ".
@@ -235,19 +240,34 @@ unless ($ARGV[0] eq "basic_tests") {
 	close FD;
 	$content =~ /^b:a:\w+$/gs or fail("Bad content of the passwd file");
 	unlink $path;
+
+	kill_spawned_child();
+	do_embedded_test();
 }
 
-# Embedded test
-=begin
-spawn("./example");
-o("GET /?name1=776655 HTTP/1.0\n\n", '776655', 'Embedded GET wrong');
-o("GET /not_exist HTTP/1.0\n\n", 'Oops.', 'Custom error handler wrong');
-o("GET /huge HTTP/1.0\n\n", 'AAA', 'Huge data handler failed');
-o("GET /users/joe/ HTTP/1.0\n\n", 'wildcard', 'Wildcard URI failed');
-o("GET /secret HTTP/1.0\n\n", 'WWW-Auth', 'Page protection failed');
-o("POST /post HTTP/1.0\nContent-Length: 7\n\n1234567", 'Written 7 bytes',
-	'Embedded POST failed');
-=cut
+sub do_embedded_test {
+	$cmd = "cc -o $embed_exe embed.c ../mongoose.c -I.. ".
+			"-DNO_SSL -lpthread -DPORT=\\\"$port\\\"";
+	print $cmd, "\n";
+	system($cmd) == 0 or fail("Cannot compile embedded unit test");
 
+	spawn("./$embed_exe");
+	o("GET /test_get_header HTTP/1.0\nHost: blah\n\n",
+			'Value: \[blah\]', 'mg_get_header', 0);
+	o("GET /test_get_var?a=b&my_var=foo&c=d HTTP/1.0\n\n",
+			'Value: \[foo\]', 'mg_get_var 1', 0);
+	o("GET /test_get_var?my_var=foo&c=d HTTP/1.0\n\n",
+			'Value: \[foo\]', 'mg_get_var 2', 0);
+	o("GET /test_get_var?a=b&my_var=foo HTTP/1.0\n\n",
+			'Value: \[foo\]', 'mg_get_var 3', 0);
+	o("POST /test_get_var HTTP/1.0\nContent-Length: 10\n\n".
+		"my_var=foo", 'Value: \[foo\]', 'mg_get_var 4', 0);
+	o("POST /test_get_var HTTP/1.0\nContent-Length: 18\n\n".
+		"a=b&my_var=foo&c=d", 'Value: \[foo\]', 'mg_get_var 5', 0);
+	o("POST /test_get_var HTTP/1.0\nContent-Length: 14\n\n".
+		"a=b&my_var=foo", 'Value: \[foo\]', 'mg_get_var 6', 0);
+
+	kill_spawned_child();
+}
 
 print "Congratulations. Test passed.\n";
