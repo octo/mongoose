@@ -36,7 +36,7 @@
 static struct mg_context *ctx;
 static const char *standard_reply =	"HTTP/1.1 200 OK\r\n"
 					"Content-Type: text/plain\r\n"
-					"Connection: close\r\n\t\n";
+					"Connection: close\r\n\r\n";
 
 static void
 test_get_var(struct mg_connection *conn, const struct mg_request_info *ri)
