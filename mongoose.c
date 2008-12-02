@@ -443,14 +443,6 @@ mg_get_header(const struct mg_connection *conn, const char *name)
 	return (get_header(&conn->request_info, name));
 }
 
-const char *
-mg_get_var(const struct mg_connection *conn, const char *name)
-{
-	conn = NULL;
-	name = NULL;
-	return (NULL);
-}
-
 /*
  * Verify that given file has certain extension
  */
@@ -848,6 +840,57 @@ url_decode(const char *src, int src_len, char *dst, int dst_len)
 	dst[j] = '\0';	/* Null-terminate the destination */
 
 	return (j);
+}
+
+static char *
+get_var(const char *name, const char *buf, int buf_len)
+{
+	const char	*p, *e, *s;
+	char		tmp[BUFSIZ];
+	int		var_len, value_len;
+
+	var_len = strlen(name);
+	e = buf + buf_len;
+
+	/* buf is "var1=val1&var2=val2...". Find variable first */
+	for (p = buf; p + var_len < e; p++)
+		if ((p == buf || p[-1] == '&') && p[var_len] == '=' &&
+		    !mg_strncasecmp(name, p, var_len)) {
+
+			/* Point p to variable value */
+			p += var_len + 1;
+
+			/* Point s to the end of the value */
+			if ((s = memchr(p, '&', e - p)) == NULL)
+				s = e;
+
+			/* URL-decode value. Return result length */
+			value_len = url_decode(p, s - p, tmp, sizeof(tmp));
+			return (mg_strdup(tmp));
+		}
+
+	return (NULL);
+}
+
+char *
+mg_get_var(const struct mg_connection *conn, const char *name)
+{
+	const struct mg_request_info	*ri = &conn->request_info;
+	char				*v1, *v2;
+
+	v1 = v2 = NULL;
+
+	/* Look in both query_string and POST data */
+	if (ri->query_string != NULL)
+		v1 = get_var(name, ri->query_string, strlen(ri->query_string));
+	if (ri->post_data_len > 0)
+		v2 = get_var(name, ri->post_data, ri->post_data_len);
+
+	/* If they both have queried variable, POST data wins */
+	if (v1 != NULL && v2 != NULL)
+		free(v1);
+
+	return (v2 == NULL ? v1 : v2);
 }
 
 static void
@@ -2891,6 +2934,28 @@ reset_connection_attributes(struct mg_connection *conn)
 }
 
 static void
+shift_to_next(struct mg_connection *conn, char *buf, int request_len, int nread)
+{
+	uint64_t	cl;
+	int		over_len, body_len;
+
+	cl = get_content_length(conn);
+	over_len = nread - request_len;
+	assert(over_len >= 0);
+
+	if (cl == ~0ULL) {
+		body_len = 0;
+	} else if (cl < (uint64_t) over_len) {
+		body_len = cl;
+	} else {
+		body_len = over_len;
+	}
+
+	nread -= request_len + body_len;
+	(void) memmove(buf, buf + request_len + body_len, nread);
+}
+
+static void
 process_new_connection(struct mg_connection *conn)
 {
 	struct mg_request_info *ri = &conn->request_info;
@@ -2925,14 +2990,7 @@ process_new_connection(struct mg_connection *conn)
 				ri->post_data_len = nread - request_len;
 				analyze_request(conn);
 				log_access(conn);
-
-				/* Move next request data to the beginning */
-				nread -= request_len + conn->num_bytes_used;
-				assert(nread >= 0);
-				assert(request_len + conn->num_bytes_used <=
-				    (int) sizeof(buf));
-				(void) memmove(buf, buf + request_len +
-				    conn->num_bytes_used, nread);
+				shift_to_next(conn, buf, request_len, nread);
 			}
 		} else {
 			/* Do not put garbage in the access log */
