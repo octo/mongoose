@@ -2909,28 +2909,35 @@ mg_get_option(const struct mg_context *ctx, const char *option_name)
 }
 
 static void
-close_connection(struct mg_connection *conn)
+reset_per_request_attributes(struct mg_connection *conn)
 {
-	if (conn->ssl)
-		SSL_free(conn->ssl);
-	if (conn->sock != -1)
-		(void) closesocket(conn->sock);
 	if (conn->request_info.remote_user != NULL)
 		free((char *) conn->request_info.remote_user);
 	if (conn->free_post_data && conn->request_info.post_data != NULL)
 		free((void *)conn->request_info.post_data);
+}
+
+static void
+close_connection(struct mg_connection *conn)
+{
+	reset_per_request_attributes(conn);
+	if (conn->ssl)
+		SSL_free(conn->ssl);
+	if (conn->sock != -1)
+		(void) closesocket(conn->sock);
 	free(conn);
 }
 
 static void
 reset_connection_attributes(struct mg_connection *conn)
 {
-	(void) memset(&conn->request_info, 0, sizeof(conn->request_info));
-	conn->status = -1;
+	reset_per_request_attributes(conn);
 	conn->free_post_data = FALSE;
+	conn->status = -1;
 	conn->keep_alive = FALSE;
 	conn->num_bytes_used = 0;
 	conn->num_bytes_sent = 0;
+	(void) memset(&conn->request_info, 0, sizeof(conn->request_info));
 }
 
 static void
@@ -2970,6 +2977,10 @@ process_new_connection(struct mg_connection *conn)
 			    buf, sizeof(buf), &nread);
 		assert(nread >= request_len);
 
+		/*
+		 * This sets conn->keep_alive to FALSE, so by default
+		 * we break the loop.
+		 */
 		reset_connection_attributes(conn);
 
 		/* 0-terminate the request: parse_request uses sscanf */
