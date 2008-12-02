@@ -63,21 +63,23 @@ typedef void (*mg_callback_t)(struct mg_connection *,
 		const struct mg_request_info *info);
 
 /*
- * Functions dealing with initialization, starting and stopping MONGOOSE
+ * Functions dealing with initialization, starting and stopping Mongoose
  *
- * mg_start		Start serving thread. Make and returns MONGOOSE context.
- * mg_set_option	Set an option for the running MONGOOSE context.
+ * mg_start		Start serving thread. Make and returns server context.
+ * mg_stop		Stop server thread, and release the context.
+ * mg_set_option	Set an option for the running context.
+ * mg_get_option	Get an option for the running context.
+ * mg_get_option_list	Get a list of all known options.
  * mg_bind		Associate user function with URI, or error, or SSI.
  *			Passing NULL as function pointer means un-bind.
  *			'*' in regex matches zero or more characters.
- * mg_stop		Stop HTTP thread, and release MONGOOSE context.
  */
 
 struct mg_context *mg_start(void);
 void mg_stop(struct mg_context *);
 
 /*
- * Altering MONGOOSE configuration:
+ * Altering Mongoose configuration:
  * Getting list of all available options and their descriptions,
  * getting current value of an option, and setting new value.
  */
@@ -104,17 +106,18 @@ void mg_bind(struct mg_context *ctx, enum mg_bind_target,
  *
  * mg_write	Send data to the remote end.
  * mg_printf	Send data, using printf() semantics.
- * mg_get_header Helper function to get specific header
- * mg_get_var	Helper function to get specific query string parameter
- * mg_version	Return MONGOOSE version string
+ * mg_get_header Helper function to get HTTP header value
+ * mg_get_var	Helper function to get form variable value.
+ *		Returned value must be free-d by the caller.
+ * mg_version	Return current version.
  * mg_md5	Helper function. buf must be 33 bytes in size. Expects
  *		a NULL terminated list of asciz strings.
- *		Fills buf with stringified '\0' terminated MD5 hash.
+ *		Fills buf with stringified \0 terminated MD5 hash.
  */
 int mg_write(struct mg_connection *, const void *buf, int len);
 int mg_printf(struct mg_connection *, const char *fmt, ...);
 const char *mg_get_header(const struct mg_connection *, const char *);
-const char *mg_get_var(const struct mg_connection *, const char *);
+char *mg_get_var(const struct mg_connection *, const char *);
 const char *mg_version(void);
 void mg_md5(char *buf, ...);
 
