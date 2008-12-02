@@ -41,7 +41,7 @@ static const char *standard_reply =	"HTTP/1.1 200 OK\r\n"
 static void
 test_get_var(struct mg_connection *conn, const struct mg_request_info *ri)
 {
-	const char *value;
+	char *value;
 
 	mg_printf(conn, "%s", standard_reply);
 
