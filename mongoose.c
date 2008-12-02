@@ -266,7 +266,6 @@ struct mg_connection {
 	int		status;		/* Status code			*/
 	bool_t		free_post_data;	/* post_data was malloc-ed	*/
 	bool_t		keep_alive;	/* Keep-Alive flag		*/
-	int		num_bytes_used;	/* Bytes used from post_data	*/
 	uint64_t	num_bytes_sent;	/* Total bytes sent to client	*/
 };
 
@@ -682,9 +681,13 @@ static int
 start_thread(void * (*func)(void *), void *param)
 {
 	pthread_t	thread_id;
+	pthread_attr_t	attr;
 	int		retval;
 
-	if ((retval = pthread_create(&thread_id, NULL, func, param)) != 0)
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+	if ((retval = pthread_create(&thread_id, &attr, func, param)) != 0)
 		cry("%s: %s", __func__, strerror(retval));
 
 	return (retval);
@@ -1945,9 +1948,7 @@ send_request_body_to_a_file(struct mg_connection *conn, int fd)
 			    content_len) == content_len)
 				success_code = TRUE;
 			conn->request_info.post_data_len = content_len;
-			conn->num_bytes_used = content_len;
 		} else {
-			conn->num_bytes_used = already_read;
 			(void) push(fd, -1, NULL,
 			    conn->request_info.post_data, already_read);
 			content_len -= already_read;
@@ -2935,7 +2936,6 @@ reset_connection_attributes(struct mg_connection *conn)
 	conn->free_post_data = FALSE;
 	conn->status = -1;
 	conn->keep_alive = FALSE;
-	conn->num_bytes_used = 0;
 	conn->num_bytes_sent = 0;
 	(void) memset(&conn->request_info, 0, sizeof(conn->request_info));
 }
