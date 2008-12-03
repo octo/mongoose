@@ -146,6 +146,7 @@ enum {FALSE, TRUE};
 
 typedef int bool_t;
 typedef void * (*mg_thread_func_t)(void *);
+static void cry(const char *, ...);
 
 static int tz_offset;
 static const char *http_500_error = "Internal Server Error";
@@ -259,9 +260,9 @@ struct mg_context {
 	int		num_callbacks;
 
 	char	*options[NUM_OPTIONS];	/* Configured opions		*/
-#if defined(__rtems__)
-	rtems_id         mutex;
-#endif /* __rtems__ */
+	pthread_mutex_t	mutex;		/* Option setter/getter guard	*/
+	pthread_cond_t	cond;		/* Condition variable for mutex	*/
+	pthread_t	main_thread_id;	/* Id of the master thread	*/
 };
 
 struct mg_connection {
@@ -292,6 +293,20 @@ struct mg_connection {
 #define	FOR_EACH_WORD_IN_LIST(s, len)					\
 	for (; s != NULL && (len = strcspn(s, ",")) != 0;		\
 			s += len, s+= strspn(s, ","))
+
+static void
+mg_lock(struct mg_context *ctx)
+{
+	if (pthread_mutex_lock(&ctx->mutex) != 0)
+		cry("pthread_mutex_lock: %s", strerror(ERRNO));
+}
+
+static void
+mg_unlock(struct mg_context *ctx)
+{
+	if (pthread_mutex_unlock(&ctx->mutex) != 0)
+		cry("pthread_mutex_unlock: %s", strerror(ERRNO));
+}
 
 /*
  * Print error message to the opened error log stream.
@@ -721,11 +736,12 @@ static bool_t
 spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		char *envp[], int fd_stdin, int fd_stdout, const char *dir)
 {
-	int		ret = FALSE;
+	int		ret;
 	pid_t		pid;
-	const char	*interp = conn->ctx->options[OPT_CGI_INTERPRETER];
+	const char	*interp;
 
 	envblk = NULL;	/* unused */
+	ret = FALSE;
 
 	if ((pid = vfork()) == -1) {
 		/* Parent */
@@ -749,6 +765,7 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 			(void) close(fd_stdout);
 
 			/* Execute CGI program */
+			interp = conn->ctx->options[OPT_CGI_INTERPRETER];
 			if (interp == NULL) {
 				(void) execle("./env.cgi", prog, NULL, envp);
 				cry("execle(%s): %s", prog, strerror(ERRNO));
@@ -955,15 +972,16 @@ mg_get_var(const struct mg_connection *conn, const char *name)
  * Transform URI to the file name.
  */
 static void
-make_path(const struct mg_context *ctx, const char *uri,
-		char *buf, size_t buf_len)
+make_path(struct mg_context *ctx, const char *uri, char *buf, size_t buf_len)
 {
-	char	*p, *s = ctx->options[OPT_ALIASES];
+	char	*p, *s;
 	int	len;
 
 	mg_snprintf(buf, buf_len, "%s%s", ctx->options[OPT_ROOT], uri);
 
 	/* If requested URI has aliased prefix, use alternate root */
+	mg_lock(ctx);
+       	s = ctx->options[OPT_ALIASES];
 	FOR_EACH_WORD_IN_LIST(s, len) {
 
 		if ((p = memchr(s, '=', len)) == NULL || p >= s + len || p == s)
@@ -975,6 +993,7 @@ make_path(const struct mg_context *ctx, const char *uri,
 			break;
 		}
 	}
+	mg_unlock(ctx);
 
 	/* Remove trailing '/' characters, if directory is requested */
 	for (p = buf + strlen(buf) - 1; p > buf && *p == '/'; p--)
@@ -1613,10 +1632,11 @@ check_authorization(struct mg_connection *conn, const char *path)
 	char		protected_path[FILENAME_MAX];
 	const char	*p, *s;
 
-	s = conn->ctx->options[OPT_PROTECT];
 	fp = NULL;
 	authorized = TRUE;
 
+	mg_lock(conn->ctx);
+	s = conn->ctx->options[OPT_PROTECT];
 	FOR_EACH_WORD_IN_LIST(s, len) {
 
 		if ((p = memchr(s, '=', len)) == NULL || p >= s + len || p == s)
@@ -1636,6 +1656,7 @@ check_authorization(struct mg_connection *conn, const char *path)
 			break;
 		}
 	}
+	mg_unlock(conn->ctx);
 
 	if (fp == NULL)
 		fp = open_auth_file(conn->ctx, path);
@@ -1910,17 +1931,20 @@ send_index_file(struct mg_connection *conn,
 
 	n = strlen(buf);
 	buf[n] = DIRSEP;
-	s = conn->ctx->options[OPT_INDEX_FILES];
 
+	mg_lock(conn->ctx);
+	s = conn->ctx->options[OPT_INDEX_FILES];
 	FOR_EACH_WORD_IN_LIST(s, len) {
 		if (len > buf_len - n - 1)
 			continue;
 		(void) mg_strlcpy(buf + n + 1, s, len + 1);
 		if (stat(buf, stp) == 0) {
 			send_file(conn, buf, stp);
+			mg_unlock(conn->ctx);
 			return (TRUE);
 		}
 	}
+	mg_unlock(conn->ctx);
 
 	buf[n] = '\0';
 
@@ -2079,14 +2103,13 @@ addenv(struct cgi_env_block *block, const char *fmt, ...)
 }
 
 static void
-prepare_cgi_environment(const struct mg_connection *conn, const char *prog,
+prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 		struct cgi_env_block *blk)
 {
 	const char	*s, *script_filename, *root;
 	char		*p;
 	int		i;
 
-	root = conn->ctx->options[OPT_ROOT];
 	blk->len = blk->nvars = 0;
 
 	/* SCRIPT_FILENAME */
@@ -2094,12 +2117,16 @@ prepare_cgi_environment(const struct mg_connection *conn, const char *prog,
 	if ((s = strrchr(prog, '/')))
 		script_filename = s + 1;
 
+	mg_lock(conn->ctx);
+	root = conn->ctx->options[OPT_ROOT];
+	addenv(blk, "SERVER_NAME=%s", conn->ctx->options[OPT_AUTH_DOMAIN]);
+	mg_unlock(conn->ctx);
+
 	/* Prepare the environment block */
 	addenv(blk, "%s", "GATEWAY_INTERFACE=CGI/1.1");
 	addenv(blk, "%s", "SERVER_PROTOCOL=HTTP/1.1");
 	addenv(blk, "%s", "REDIRECT_STATUS=200");	/* PHP */
 	addenv(blk, "SERVER_PORT=%d", ntohs(conn->lsa.u.sin.sin_port));
-	addenv(blk, "SERVER_NAME=%s", conn->ctx->options[OPT_AUTH_DOMAIN]);
 	addenv(blk, "SERVER_ROOT=%s", root);
 	addenv(blk, "DOCUMENT_ROOT=%s", root);
 	addenv(blk, "REQUEST_METHOD=%s", conn->request_info.request_method);
@@ -2308,8 +2335,10 @@ do_ssi_include(struct mg_connection *conn, char *tag)
 		(void) mg_snprintf(path, sizeof(path), "%s%c%s");
 	} else if (sscanf(tag, " virtual=\"%[^\"]\"", file_name) == 1) {
 		/* File name is relative to the webserver root */
+		mg_lock(conn->ctx);
 		(void) mg_snprintf(path, sizeof(path), "%s%c%s",
 		    conn->ctx->options[OPT_ROOT], DIRSEP, file_name);
+		mg_unlock(conn->ctx);
 	} else if (sscanf(tag, " \"%[^\"]\"", file_name) == 1) {
 		/* File name is relative to the webserver working directory */
 		(void) mg_snprintf(path, sizeof(path), "%s", file_name);
@@ -2590,18 +2619,22 @@ isbyte(int n) {
 }
 
 static bool_t
-check_acl(const struct mg_context *ctx, const struct usa *usa)
+check_acl(struct mg_context *ctx, const struct usa *usa)
 {
 	int		a, b, c, d, n, len, mask, allowed;
 	char		flag, *s;
 	uint32_t	acl_subnet, acl_mask, remote_ip;
 
 	(void) memcpy(&remote_ip, &usa->u.sin.sin_addr, sizeof(remote_ip));
+
+	mg_lock(ctx);
 	s = ctx->options[OPT_ACL];
 
 	/* Allow by default, if no ACL is set */
-	if (s == NULL)
+	if (s == NULL) {
+		mg_unlock(ctx);
 		return (TRUE);
+	}
 
 	/* If any ACL is set, deny by default */
 	allowed = '-';
@@ -2627,6 +2660,7 @@ check_acl(const struct mg_context *ctx, const struct usa *usa)
 		if (acl_subnet == (ntohl(remote_ip) & acl_mask))
 			allowed = flag;
 	}
+	mg_unlock(ctx);
 
 	return (allowed == '+');
 }
@@ -2918,6 +2952,7 @@ mg_set_option(struct mg_context *ctx, const char *opt, const char *val)
 	const struct mg_option	*option;
 	int				i, ctx_index, retval;
 
+	mg_lock(ctx);
 	if (opt != NULL && (option = find_opt(opt)) != NULL) {
 		i = option - known_options;
 
@@ -2936,6 +2971,7 @@ mg_set_option(struct mg_context *ctx, const char *opt, const char *val)
 	} else {
 		retval = -1;
 	}
+	mg_unlock(ctx);
 
 	return (retval);
 }
@@ -2947,14 +2983,16 @@ mg_get_option_list(void)
 }
 
 const char *
-mg_get_option(const struct mg_context *ctx, const char *option_name)
+mg_get_option(struct mg_context *ctx, const char *option_name)
 {
 	const struct mg_option	*o;
 	const char			*value = NULL;
 
+	mg_lock(ctx);
 	value = NULL;
 	if ((o = find_opt(option_name)) != NULL)
 		value = ctx->options[setters[o - known_options].context_index];
+	mg_unlock(ctx);
 
 	return (value);
 }
@@ -3108,6 +3146,14 @@ event_loop(struct mg_context *ctx)
 	struct timeval	tv;
 	int		i, max_fd;
 
+	/* Store our ID */
+	ctx->main_thread_id = pthread_self();
+
+	/* Signal mg_init() that we're started */
+	mg_lock(ctx);
+	pthread_cond_signal(&ctx->cond);
+	mg_unlock(ctx);
+
 	while (ctx->stop_flag == 0) {
 		FD_ZERO(&read_set);
 		max_fd = -1;
@@ -3182,7 +3228,12 @@ mg_start(void)
 	{WSADATA data;	WSAStartup(MAKEWORD(2,2), &data);}
 #endif /* _WIN32 */
 
+	(void) pthread_mutex_init(&ctx->mutex, NULL);
+	(void) pthread_cond_init(&ctx->cond, NULL);
+	mg_lock(ctx);
 	start_thread((mg_thread_func_t) event_loop, ctx);
+	pthread_cond_wait(&ctx->cond, &ctx->mutex);
+	mg_unlock(ctx);
 
 	return (ctx);
 }
