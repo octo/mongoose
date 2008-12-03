@@ -269,6 +269,14 @@ sub do_embedded_test {
 		"a=b&my_var=foo&c=d", 'Value: \[foo\]', 'mg_get_var 5', 0);
 	o("POST /test_get_var HTTP/1.0\nContent-Length: 14\n\n".
 		"a=b&my_var=foo", 'Value: \[foo\]', 'mg_get_var 6', 0);
+	o("POST /test_get_request_info?xx=yy HTTP/1.0\nFoo: bar\n".
+		"Content-Length: 3\n\na=b",
+		'Method: \[POST\].URI: \[/test_get_request_info\].'.
+		'HTTP version: \[1/0\].HTTP header \[Foo\]: \[bar\].'.
+		'HTTP header \[Content-Length\]: \[3\].'.
+		'Query string: \[xx=yy\].POST data: \[a=b\].'.
+		'Remote IP: \[\d+\].Remote port: \[\d+\].'.
+		, 'request_info', 0);
 
 	kill_spawned_child();
 }
