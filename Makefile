@@ -36,7 +36,7 @@ man:
 
 test: test-server
 test-server:
-	cd test && perl test.pl
+	perl test/test.pl
 
 clean:
 	rm -rf *.o *.core $(PROG) *.obj $(PROG).1.txt *.dSYM

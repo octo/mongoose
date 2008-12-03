@@ -10,19 +10,21 @@ use diagnostics;
 my $port = 23456;
 my $pid = undef;
 my $num_requests;
-my $dir = 'test_dir';
-my $alias = "/aliased=/etc/,/ta=$dir";
-my $config = '../mongoose.conf';
-my $exe = '../mongoose';
+my $root = 'test';
+my $test_dir_uri = "test_dir";
+my $test_dir = "$root/$test_dir_uri";
+my $alias = "/aliased=/etc/,/ta=$test_dir";
+my $config = 'mongoose.conf';
+my $exe = 'mongoose';
 my $embed_exe = 'embed';
 my $exit_code = 0;
 
 my @files_to_delete = ('debug.log', 'access.log', $config, 'put.txt',
-	"$dir/index.html", "$dir/env.cgi", 'binary_file', $embed_exe);
+	"$test_dir/index.html", "$test_dir/env.cgi", 'binary_file', $embed_exe);
 
 END {
 	unlink @files_to_delete;
-	rmdir $dir;
+	rmdir $test_dir;
 	kill_spawned_child();
 	exit $exit_code;
 }
@@ -104,7 +106,7 @@ $SIG{PIPE} = 'IGNORE';
 # Make sure we export only symbols that start with "mg_", and keep local
 # symbols static.
 if ($^O =~ /darwin|bsd|linux/) {
-	my $out = `(cd .. && cc -c mongoose.c && nm mongoose.o) | grep ' T '`;
+	my $out = `(cc -c mongoose.c && nm mongoose.o) | grep ' T '`;
 	foreach (split /\n/, $out) {
 		/T\s+_?mg_.+/ or fail("Exported symbol $_")
 	}
@@ -117,14 +119,15 @@ close FD;
 spawn($exe);
 my $saved_port = $port;
 $port = 12345;
-o("GET /hello.txt HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'Loading config file');
+o("GET /test/hello.txt HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'Loading config file');
 $port = $saved_port;
 unlink $config;
 kill_spawned_child();
 
 # Spawn the server on port $port
 spawn("$exe -ports $port -access_log access.log -error_log debug.log ".
-		"-aliases $alias -auth_PUT passfile");
+		"-root test ".
+		"-aliases $alias -auth_PUT test/passfile");
 
 # Try to overflow: Send very long request
 req('POST ' . '/..' x 100 . 'ABCD' x 3000 . "\n\n", 0); # don't log this one
@@ -140,12 +143,13 @@ o("GET / HTTP/1.1z\r\n\r\n", '400 Bad Request', 'Bad HTTP min Version', 0);
 o("GET / HTTP/02.0\r\n\r\n", '505 HTTP version not supported',
 	'HTTP Version >1.1');
 
-mkdir $dir unless -d $dir;
-o("GET /$dir/not_exist HTTP/1.0\n\n", 'HTTP/1.1 404', 'PATH_INFO loop problem');
-o("GET /$dir HTTP/1.0\n\n", 'HTTP/1.1 301', 'Directory redirection');
-o("GET /$dir/ HTTP/1.0\n\n", 'Modified', 'Directory listing');
-open FD, ">$dir/index.html"; print FD "tralala"; close FD;
-o("GET /$dir/ HTTP/1.0\n\n", 'tralala', 'Index substitution');
+mkdir $test_dir unless -d $test_dir;
+o("GET /$test_dir_uri/not_exist HTTP/1.0\n\n",
+	'HTTP/1.1 404', 'PATH_INFO loop problem');
+o("GET /$test_dir_uri HTTP/1.0\n\n", 'HTTP/1.1 301', 'Directory redirection');
+o("GET /$test_dir_uri/ HTTP/1.0\n\n", 'Modified', 'Directory listing');
+open FD, ">$test_dir/index.html"; print FD "tralala"; close FD;
+o("GET /$test_dir_uri/ HTTP/1.0\n\n", 'tralala', 'Index substitution');
 o("GET /ta/ HTTP/1.0\n\n", 'Modified', 'Aliases');
 o("GET /not-exist HTTP/1.0\r\n\n", 'HTTP/1.1 404', 'Not existent file');
 o("GET /hello.txt HTTP/1.1\n\nGET /hello.txt HTTP/1.0\n\n",
@@ -165,18 +169,18 @@ my $mime_types = {
 
 foreach my $key (keys %$mime_types) {
 	my $filename = "_mime_file_test.$key";
-	open FD, ">$filename";
+	open FD, ">$root/$filename";
 	close FD; 
 	o("GET /$filename HTTP/1.0\n\n",
 		"Content-Type: $mime_types->{$key}", ".$key mime type");
-	unlink $filename;
+	unlink "$root/$filename";
 }
 
 # Get binary file and check the integrity
 my $binary_file = 'binary_file';
 my $f2 = ''; 
 foreach (0..123456) { $f2 .= chr(int(rand() * 255)); }
-open FD, ">$binary_file";
+open FD, ">$root/$binary_file";
 binmode FD;
 print FD $f2;
 close FD;
@@ -226,9 +230,9 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 		"HTTP/1.1 100 Continue.+HTTP/1.1 200", 'PUT 100-Continue');
 
 	# Check that CGI's current directory is set to script's directory
-	system("cp env.cgi $dir");
-	o("GET /$dir/env.cgi HTTP/1.0\n\n",
-		"CURRENT_DIR=.*$dir", "CGI chdir()");
+	system("cp env.cgi $test_dir");
+	o("GET /$test_dir_uri/env.cgi HTTP/1.0\n\n",
+		"CURRENT_DIR=.*$test_dir", "CGI chdir()");
 	o("GET /hello.shtml HTTP/1.0\n\n",
 		'inc_begin.*root.*inc_end', 'SSI (include)');
 	o("GET /hello.shtml HTTP/1.0\n\n",
