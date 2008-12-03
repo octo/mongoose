@@ -20,7 +20,8 @@ my $embed_exe = './embed';
 my $exit_code = 0;
 
 my @files_to_delete = ('debug.log', 'access.log', $config, "$root/put.txt",
-	"$test_dir/index.html", "$test_dir/env.cgi", 'binary_file', $embed_exe);
+	"$test_dir/index.html", "$test_dir/env.cgi",
+	"$root/binary_file", $embed_exe);
 
 END {
 	unlink @files_to_delete;
