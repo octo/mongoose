@@ -741,7 +741,7 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	envblk = NULL;	/* unused */
 	ret = FALSE;
 
-	if ((pid = vfork()) == -1) {
+	if ((pid = fork()) == -1) {
 		/* Parent */
 		ret = -1;
 		send_error(conn, 500, http_500_error,
