@@ -89,7 +89,7 @@ struct mg_option {
 	const char	*default_value;
 };
 const struct mg_option *mg_get_option_list(void);
-const char *mg_get_option(const struct mg_context *, const char *);
+const char *mg_get_option(struct mg_context *, const char *);
 int mg_set_option(struct mg_context *, const char *, const char *);
 
 /*
