@@ -52,8 +52,6 @@ signal_handler(int sig_num)
 #endif /* !_WIN32 */
 	default:
 		exit_flag = sig_num;
-                if (ctx != NULL)
-                    mg_stop(ctx);
 		break;
 	}
 }
@@ -262,6 +260,8 @@ main(int argc, char *argv[])
 	fflush(stdout);
 	while (exit_flag == 0)
 		pause();
+
+	mg_stop(ctx);
 	(void) printf("Exit on signal %d\n", exit_flag);
 
 	return (EXIT_SUCCESS);
