@@ -713,27 +713,33 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		    "fork(): %s", strerror(ERRNO));
 	} else if (pid == 0) {
 		/* Child */
-		(void) chdir(dir);
-		(void) dup2(fd_stdin, 0);
-		(void) dup2(fd_stdout, 1);
-
-		/* If error file is specified, send errors there */
-		if (error_log != NULL)
-			(void) dup2(fileno(error_log), 2);
-
-		/* Execute CGI program */
-		if (interp == NULL) {
-			(void) execle(prog, prog, NULL, envp);
-			send_error(conn, 500, http_500_error,
-			    "execle(%s): %s", prog, strerror(ERRNO));
+		if (chdir(dir) != 0) {
+			cry("chdir(%s): %s", dir, strerror(ERRNO));
+		} else if (dup2(fd_stdin, 0) == -1) {
+			cry("dup2(stdin, %d): %s", fd_stdin, strerror(ERRNO));
+		} else if (dup2(fd_stdout, 1) == -1) {
+			cry("dup2(stdout, %d): %s", fd_stdout, strerror(ERRNO));
 		} else {
-			(void) execle(interp, interp, prog, NULL, envp);
-			send_error(conn, 500, http_500_error,
-			    "execle(%s %s): %s", interp, prog, strerror(ERRNO));
+			/* If error file is specified, send errors there */
+			if (error_log != NULL)
+				(void) dup2(fileno(error_log), 2);
+
+			(void) close(fd_stdin);
+			(void) close(fd_stdout);
+
+			/* Execute CGI program */
+			if (interp == NULL) {
+				(void) execle("./env.cgi", prog, NULL, envp);
+				cry("execle(%s): %s", prog, strerror(ERRNO));
+			} else {
+				(void) execle(interp, interp, prog, NULL, envp);
+				cry("execle(%s %s): %s",
+				    interp, prog, strerror(ERRNO));
+			}
 		}
 		exit(EXIT_FAILURE);
 	} else {
-		/* Parent */
+		/* Parent. Suspended until child does execle() */
 		(void) close(fd_stdin);
 		(void) close(fd_stdout);
 		ret = TRUE;
@@ -1896,67 +1902,89 @@ not_modified(const struct mg_connection *conn, const struct stat *stp)
 	return (ims != NULL && stp->st_mtime < date_to_epoch(ims));
 }
 
-#if !(defined(NO_AUTH) && defined(NO_CGI))
-static uint64_t
-send_to_a_file(struct mg_connection *conn, uint64_t len, int fd)
+static bool_t
+append_chunk(struct mg_request_info *ri, int fd, const char *buf, int len)
 {
-	char	buf[BUFSIZ];
-	int	to_read, nread;
+	bool_t	ret_code = TRUE;
 
-	while (len > 0) {
-		to_read = sizeof(buf);
-		if ((uint64_t) to_read > len)
-			to_read = len;
-		nread = pull(-1, conn->sock, conn->ssl, buf, to_read);
-		if (nread <= 0) {
-			cry("%s: Unexpected EOF: %s",
-			    __func__, strerror(ERRNO));
-			break;
-		} else if (push(fd, -1, NULL, buf, nread) != (uint64_t) nread) {
-			cry("%s: write(%d): %s",
-			    __func__, nread, strerror(ERRNO));
-			break;
-		}
-		len -= nread;
+	if (fd == -1) {
+		/* TODO: check for NULL here */
+		ri->post_data = realloc((char *) ri->post_data,
+		    ri->post_data_len + len);
+		(void) memcpy((char *) ri->post_data + ri->post_data_len,
+		    buf, len);
+		ri->post_data_len += len;
+	} else if (push(fd, -1, NULL, buf, len) != (uint64_t) len) {
+		ret_code = FALSE;
 	}
 
-	return (len);
+	return (ret_code);
 }
 
 static bool_t
-send_request_body_to_a_file(struct mg_connection *conn, int fd)
+handle_request_body(struct mg_connection *conn, int fd)
 {
-	const char	*cl, *expect;
-	uint64_t	content_len, already_read;
+	struct mg_request_info	*ri = &conn->request_info;
+	const char	*expect, *tmp;
+	uint64_t	content_len;
+	char		buf[BUFSIZ];
+	int		to_read, nread, already_read;
 	bool_t		success_code = FALSE;
 
-	cl = mg_get_header(conn, "Content-Length");
+	content_len = get_content_length(conn);
 	expect = mg_get_header(conn, "Expect");
 
-	if (expect == NULL && cl == NULL) {
+	if (content_len == ~0ULL) {
 		send_error(conn, 411, "Length Required", "");
 	} else if (expect != NULL && mg_strcasecmp(expect, "100-continue")) {
 		send_error(conn, 417, "Expectation Failed", "");
 	} else {
-		content_len = get_content_length(conn);
-		already_read = conn->request_info.post_data_len;
-		if (content_len <= already_read) {
-			if (push(fd, -1, NULL, conn->request_info.post_data,
-			    content_len) == content_len)
+		if (expect != NULL)
+			(void) mg_printf(conn, "HTTP/1.1 100 Continue\r\n\r\n");
+
+		already_read = ri->post_data_len;
+		assert(already_read >= 0);
+
+		if (content_len <= (uint64_t) already_read) {
+			ri->post_data_len = content_len;
+			if (fd != -1 && push(fd, -1, NULL,
+			    ri->post_data, content_len) == content_len)
 				success_code = TRUE;
-			conn->request_info.post_data_len = content_len;
 		} else {
-			(void) push(fd, -1, NULL,
-			    conn->request_info.post_data, already_read);
+
+			if (fd == -1) {
+				conn->free_post_data = TRUE;
+				tmp = ri->post_data;
+				/* +1 in case if already_read == 0 */
+				ri->post_data = malloc(already_read + 1);
+				(void) memcpy((char *) ri->post_data,
+				    tmp, already_read);
+			} else {
+				(void) push(fd, -1, NULL,
+				    ri->post_data, already_read);
+			}
+
 			content_len -= already_read;
-			if (send_to_a_file(conn, content_len, fd) == 0)
-				success_code = TRUE;
+
+			while (content_len > 0) {
+				to_read = sizeof(buf);
+				if ((uint64_t) to_read > content_len)
+					to_read = content_len;
+				nread = pull(-1, conn->sock,
+				    conn->ssl, buf, to_read);
+				if (nread <= 0) {
+					break;
+				} else if (!append_chunk(ri, fd, buf, nread)) {
+					break;
+				}
+				content_len -= nread;
+			}
+			success_code = content_len == 0 ? TRUE : FALSE;
 		}
 	}
 
 	return (success_code);
 }
-#endif /* !NO_CGI, NO_AUTH*/
 
 #if !defined(NO_CGI)
 struct cgi_env_block {
@@ -2101,7 +2129,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	    fd_stdin[0], fd_stdout[1], dir)) {
 		goto done;
 	} else if (!strcmp(conn->request_info.request_method, "POST") &&
-	    !send_request_body_to_a_file(conn, fd_stdin[1])) {
+	    !handle_request_body(conn, fd_stdin[1])) {
 		goto done;
 	}
 
@@ -2202,7 +2230,7 @@ put_file(struct mg_connection *conn, const char *path)
 		    "open(%s): %s", path, strerror(ERRNO));
 	} else {
 		set_close_on_exec(fd);
-		if (send_request_body_to_a_file(conn, fd))
+		if (handle_request_body(conn, fd))
 			send_error(conn, conn->status, "OK", "");
 		(void) close(fd);
 	}
@@ -2333,52 +2361,6 @@ send_ssi(struct mg_connection *conn, const char *path)
 #endif /* !NO_SSI */
 
 static void
-buffer_in_post_data(struct mg_connection *conn)
-{
-	struct mg_request_info	*ri = &conn->request_info;
-	const char	*tmp;
-	char		buf[BUFSIZ];
-	uint64_t	content_len;
-	int		already_read, n;
-
-	content_len = get_content_length(conn);
-	if (content_len == ~0ULL) {
-		ri->post_data = NULL;
-		ri->post_data_len = 0;
-		return;
-	}
-
-	already_read = ri->post_data_len;
-	assert(already_read >= 0);
-	if (content_len <= (uint64_t) already_read)
-		return;
-
-	conn->free_post_data = TRUE;
-	tmp = ri->post_data;
-	/* +1 in case if already_read == 0 */
-	ri->post_data = malloc(already_read + 1);
-	(void) memcpy((char *) ri->post_data, tmp, already_read);
-	content_len -= already_read;
-	while (content_len > 0) {
-		n = sizeof(buf);
-		if (content_len < (uint64_t) n)
-			n = content_len;
-		n = pull(-1, conn->sock, conn->ssl, buf, n);
-		if (n <= 0) {
-			break;
-		} else {
-			/* TODO: check for NULL here */
-			ri->post_data = realloc((char *) ri->post_data,
-			    ri->post_data_len + n);
-			(void) memcpy((char *) ri->post_data +
-			    ri->post_data_len, buf, n);
-			ri->post_data_len += n;
-			content_len -= n;
-		}
-	}
-}
-
-static void
 analyze_request(struct mg_connection *conn)
 {
 	struct stat		st;
@@ -2394,9 +2376,10 @@ analyze_request(struct mg_connection *conn)
 	make_path(conn->ctx, uri, path, sizeof(path));
 
 	if ((cb = find_callback(conn->ctx, uri, BIND_TO_URI)) != NULL) {
-		if (!strcmp(ri->request_method, "POST"))
-			buffer_in_post_data(conn);
-		cb(conn, &conn->request_info);
+		if (strcmp(ri->request_method, "POST") ||
+		    (!strcmp(ri->request_method, "POST") &&
+		    handle_request_body(conn, -1)))
+			cb(conn, &conn->request_info);
 	} else
 #if !defined(NO_AUTH)
 	if (!check_authorization(conn, path)) {
@@ -2420,7 +2403,7 @@ analyze_request(struct mg_connection *conn)
 	} else
 #endif /* NO_AUTH */
 	if (stat(path, &st) != 0) {
-		send_error(conn, 404, "Not Found", "%s", "Not Found");
+		send_error(conn, 404, "Not Found", "%s", "");
 	} else if (S_ISDIR(st.st_mode) && uri[strlen(uri) - 1] != '/') {
 		(void) mg_printf(conn,
 		    "HTTP/1.1 301 Moved Permanently\r\n"
