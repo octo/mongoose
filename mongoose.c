@@ -261,8 +261,6 @@ struct mg_context {
 
 	char	*options[NUM_OPTIONS];	/* Configured opions		*/
 	pthread_mutex_t	mutex;		/* Option setter/getter guard	*/
-	pthread_cond_t	cond;		/* Condition variable for mutex	*/
-	pthread_t	main_thread_id;	/* Id of the master thread	*/
 };
 
 struct mg_connection {
@@ -3146,14 +3144,6 @@ event_loop(struct mg_context *ctx)
 	struct timeval	tv;
 	int		i, max_fd;
 
-	/* Store our ID */
-	ctx->main_thread_id = pthread_self();
-
-	/* Signal mg_init() that we're started */
-	mg_lock(ctx);
-	pthread_cond_signal(&ctx->cond);
-	mg_unlock(ctx);
-
 	while (ctx->stop_flag == 0) {
 		FD_ZERO(&read_set);
 		max_fd = -1;
@@ -3229,11 +3219,7 @@ mg_start(void)
 #endif /* _WIN32 */
 
 	(void) pthread_mutex_init(&ctx->mutex, NULL);
-	(void) pthread_cond_init(&ctx->cond, NULL);
-	mg_lock(ctx);
 	start_thread((mg_thread_func_t) event_loop, ctx);
-	pthread_cond_wait(&ctx->cond, &ctx->mutex);
-	mg_unlock(ctx);
 
 	return (ctx);
 }
