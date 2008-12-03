@@ -2336,39 +2336,44 @@ static void
 buffer_in_post_data(struct mg_connection *conn)
 {
 	struct mg_request_info	*ri = &conn->request_info;
-	const char			*cl, *tmp;
-	char				buf[BUFSIZ];
-	int				content_len, already_read, n;
+	const char	*tmp;
+	char		buf[BUFSIZ];
+	uint64_t	content_len;
+	int		already_read, n;
 
-	cl = mg_get_header(conn, "Content-Length");
-	if (cl == NULL) {
+	content_len = get_content_length(conn);
+	if (content_len == ~0ULL) {
 		ri->post_data = NULL;
 		ri->post_data_len = 0;
 		return;
 	}
 
-	content_len = atoi(cl);
 	already_read = ri->post_data_len;
-	if (already_read >= content_len)
+	assert(already_read >= 0);
+	if (content_len <= (uint64_t) already_read)
 		return;
 
 	conn->free_post_data = TRUE;
 	tmp = ri->post_data;
-	ri->post_data = malloc(already_read);
+	/* +1 in case if already_read == 0 */
+	ri->post_data = malloc(already_read + 1);
 	(void) memcpy((char *) ri->post_data, tmp, already_read);
 	content_len -= already_read;
 	while (content_len > 0) {
-		n = pull(-1, conn->sock, conn->ssl, buf, sizeof(buf));
+		n = sizeof(buf);
+		if (content_len < (uint64_t) n)
+			n = content_len;
+		n = pull(-1, conn->sock, conn->ssl, buf, n);
 		if (n <= 0) {
 			break;
 		} else {
-			ri->post_data_len += n;
+			/* TODO: check for NULL here */
 			ri->post_data = realloc((char *) ri->post_data,
 			    ri->post_data_len + n);
-			(void) memcpy(buf,
-			    ri->post_data + ri->post_data_len , n);
+			(void) memcpy((char *) ri->post_data +
+			    ri->post_data_len, buf, n);
 			ri->post_data_len += n;
-			content_len += n;
+			content_len -= n;
 		}
 	}
 }
