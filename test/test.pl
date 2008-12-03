@@ -3,6 +3,9 @@
 # $Id$
 
 use IO::Socket;
+use strict;
+use warnings;
+use diagnostics;
 
 my $port = 23456;
 my $pid = undef;
@@ -42,25 +45,18 @@ sub req {
 		PeerAddr=>'127.0.0.1', PeerPort=>$port);
 	fail("Cannot connect: $!") unless $sock;
 	$sock->autoflush(1);
-	print $sock $_ foreach (split //, $request);
-	my ($out, $cl, $tl, $body) = ('', 0, 0, 0);
-	while ($line = <$sock>) {
-		$out .= $line;
-		$cl = $1 if $line =~ /Content-Length: (\d+)/;
-		$body++ if  $line =~ /^\s*$/;
-		$tl += length($line) if $body;
-		last if $cl and $tl >= $cl;
-	};
-	close $sock;
-	if (defined($inc)) {
-		$num_requests += $inc;
-	} else {
-		$num_requests++;
+	foreach (split //, $request) {
+		print $sock $_;
+		select undef, undef, undef, .001 if length($request) < 256;
 	}
+	my @lines = <$sock>;
+	my $out = join '', @lines;
+	close $sock;
+
+	$num_requests += defined($inc) ? $inc : 1;
 	my $num_logs = get_num_of_log_entries();
 
 	unless ($num_requests == $num_logs) {
-		print read_file('access.log');
 		fail("Request has not been logged: [$request]")
 	}
 
@@ -70,9 +66,13 @@ sub req {
 # Send the request. Compare with the expected reply. Fail if no match
 sub o {
 	my ($request, $expected_reply, $message, $num_logs) = @_;
+	print "$message ... ";
 	my $reply = req($request, $num_logs);
-	fail("$message ($reply)") unless $reply =~ /$expected_reply/s;
-	print "PASS: $message\n";
+	if ($reply =~ /$expected_reply/s) {
+		print "OK\n";
+	} else {
+		fail("Expected: [$expected_reply], got: [$reply]");
+	}
 }
 
 # Spawn a server listening on specified port
@@ -98,11 +98,13 @@ sub kill_spawned_child {
 ####################################################### ENTRY POINT
 
 unlink @files_to_delete;
+$SIG{PIPE} = 'IGNORE';
+#local $| =1;
 
 # Make sure we export only symbols that start with "mg_", and keep local
 # symbols static.
 if ($^O =~ /darwin|bsd|linux/) {
-	$out = `(cd .. && cc -c mongoose.c && nm mongoose.o) | grep ' T '`;
+	my $out = `(cd .. && cc -c mongoose.c && nm mongoose.o) | grep ' T '`;
 	foreach (split /\n/, $out) {
 		/T\s+_?mg_.+/ or fail("Exported symbol $_")
 	}
@@ -147,7 +149,8 @@ o("GET /$dir/ HTTP/1.0\n\n", 'tralala', 'Index substitution');
 o("GET /ta/ HTTP/1.0\n\n", 'Modified', 'Aliases');
 o("GET /not-exist HTTP/1.0\r\n\n", 'HTTP/1.1 404', 'Not existent file');
 o("GET /hello.txt HTTP/1.1\n\nGET /hello.txt HTTP/1.0\n\n",
-	'HTTP/1.1 200.+keep-alive', 'Request pipelining', 2);
+	'HTTP/1.1 200.+keep-alive.+HTTP/1.1 200.+close',
+	'Request pipelining', 2);
 
 
 my $mime_types = {
@@ -187,9 +190,9 @@ $out =~ /206 Partial Content/ or fail("Partial Content not seen ($out)");
 $out =~ /Content-Length: 3/ or fail("Bad Range length ($out)");
 $out =~ /Content-Range: bytes 3-5/ or fail("Bad Range ($out)");
 $out =~ /\nple$/s or fail("Bad Range content ($out)");
-print "PASS: Range support\n";
+print "Range support ... OK\n";
 
-unless ($ARGV[0] eq "basic_tests") {
+unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 	o("GET /env.cgi HTTP/1.0\n\r\n", 'HTTP/1.1 200 OK', 'GET CGI file');
 	o("GET /env.cgi?var=HELLO HTTP/1.0\n\n", 'QUERY_STRING=var=HELLO',
 		'QUERY_STRING wrong');
@@ -246,7 +249,7 @@ unless ($ARGV[0] eq "basic_tests") {
 }
 
 sub do_embedded_test {
-	$cmd = "cc -o $embed_exe embed.c ../mongoose.c -I.. ".
+	my $cmd = "cc -o $embed_exe embed.c ../mongoose.c -I.. ".
 			"-DNO_SSL -lpthread -DPORT=\\\"$port\\\"";
 	print $cmd, "\n";
 	system($cmd) == 0 or fail("Cannot compile embedded unit test");
