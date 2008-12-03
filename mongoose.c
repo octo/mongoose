@@ -131,6 +131,7 @@ typedef struct DIR {
 #define	MAX_LISTENING_SOCKETS	10
 #define	MAX_CALLBACKS		20
 #define	ARRAY_SIZE(array)	(sizeof(array) / sizeof(array[0]))
+#define	UNKNOWN_CONTENT_LENGTH	~0ULL
 
 /*
  * Darwin prior to 7.0 and Win32 do not have socklen_t
@@ -215,6 +216,9 @@ struct usa {
 	} u;
 };
 
+/*
+ * Numeric indexes for the option values in context, ctx->options
+ */
 enum mg_option_index {
 	OPT_ROOT, OPT_INDEX_FILES, OPT_PORTS, OPT_DIR_LIST, OPT_CGI_EXTENSIONS,
 	OPT_CGI_INTERPRETER, OPT_SSI_EXTENSIONS, OPT_AUTH_DOMAIN,
@@ -229,6 +233,9 @@ struct listener {
 	int	is_ssl;		/* Should be SSL-ed		*/
 };
 
+/*
+ * Callback function, and where it is bound to
+ */
 struct callback {
 	enum mg_bind_target	bind_target;
 	const char		*regex;
@@ -239,11 +246,11 @@ struct callback {
  * Mongoose context
  */
 struct mg_context {
-	int		stop_flag;
-	SSL_CTX		*ssl_ctx;
+	int		stop_flag;	/* Should we stop event loop	*/
+	SSL_CTX		*ssl_ctx;	/* SSL context			*/
 
-	FILE		*access_log;
-	FILE		*error_log;
+	FILE		*access_log;	/* Opened access log		*/
+	FILE		*error_log;	/* Opened error log		*/
 
 	struct listener	listeners[MAX_LISTENING_SOCKETS];
 	int		num_listeners;
@@ -251,7 +258,7 @@ struct mg_context {
 	struct callback	callbacks[MAX_CALLBACKS];
 	int		num_callbacks;
 
-	char	*options[NUM_OPTIONS];
+	char	*options[NUM_OPTIONS];	/* Configured opions		*/
 #if defined(__rtems__)
 	rtems_id         mutex;
 #endif /* __rtems__ */
@@ -286,6 +293,9 @@ struct mg_connection {
 	for (; s != NULL && (len = strcspn(s, ",")) != 0;		\
 			s += len, s+= strspn(s, ","))
 
+/*
+ * Print error message to the opened error log stream.
+ */
 static void
 cry(const char *fmt, ...)
 {
@@ -355,6 +365,12 @@ mg_strdup(const char *str)
 	return (mg_strndup(str, strlen(str)));
 }
 
+/*
+ * Like snprintf(), but never returns negative value, or the value
+ * that is larger than a supplied buffer.
+ * Thanks to Adam Zeldis to pointing snprintf()-caused vulnerability
+ * in his audit report.
+ */
 static int
 mg_vsnprintf(char *buf, size_t buflen, const char *fmt, va_list ap)
 {
@@ -377,12 +393,6 @@ mg_vsnprintf(char *buf, size_t buflen, const char *fmt, va_list ap)
 	return (n);
 }
 
-/*
- * Sane snprintf(). Acts like snprintf(), but never return -1 or the
- * value bigger than supplied buffer.
- * Thanks Adam Zeldis to pointing snprintf()-caused vulnerability
- * in his audit report.
- */
 static int
 mg_snprintf(char *buf, size_t buflen, const char *fmt, ...)
 {
@@ -396,6 +406,9 @@ mg_snprintf(char *buf, size_t buflen, const char *fmt, ...)
 	return (n);
 }
 
+/*
+ * Convert string representing a boolean value to a boolean value
+ */
 static bool_t
 is_true(const char *str)
 {
@@ -409,6 +422,11 @@ is_true(const char *str)
 	return (FALSE);
 }
 
+/*
+ * Skip the characters until one of the delimiters characters found.
+ * 0-terminate resulting word. Skip the rest of the delimiters if any.
+ * Advance pointer to buffer to the next word. Return found 0-terminated word.
+ */
 static char *
 skip(char **buf, const char *delimiters)
 {
@@ -426,6 +444,9 @@ skip(char **buf, const char *delimiters)
 	return (begin_word);
 }
 
+/*
+ * Return HTTP header value, or NULL if not found.
+ */
 static const char *
 get_header(const struct mg_request_info *ri, const char *name)
 {
@@ -750,6 +771,10 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 #endif /* !NO_CGI */
 #endif /* _WIN32 */
 
+/*
+ * Write data to the IO channel - opened file descriptor, socket or SSL
+ * descriptor. Return number of bytes written.
+ */
 static uint64_t
 push(int fd, int sock, void *ssl, const char *buf, uint64_t len)
 {
@@ -778,6 +803,10 @@ push(int fd, int sock, void *ssl, const char *buf, uint64_t len)
 	return (sent);
 }
 
+/*
+ * Read from IO channel - opened file descriptor, socket, or SSL descriptor.
+ * Return number of bytes read.
+ */
 static int
 pull(int fd, int sock, void *ssl, char *buf, int len)
 {
@@ -817,13 +846,21 @@ mg_printf(struct mg_connection *conn, const char *fmt, ...)
 	return (mg_write(conn, buf, len));
 }
 
+/*
+ * Return content length of the request, or UNKNOWN_CONTENT_LENGTH constant if
+ * Content-Length header is not set.
+ */
 static uint64_t
 get_content_length(const struct mg_connection *conn)
 {
 	const char *cl = mg_get_header(conn, "Content-Length");
-	return (cl == NULL ? ~0ULL : strtoull(cl, NULL, 10));
+	return (cl == NULL ? UNKNOWN_CONTENT_LENGTH : strtoull(cl, NULL, 10));
 }
 
+/*
+ * URL-decode input buffer into destination buffer.
+ * 0-terminate the destination buffer. Return the length of decoded data.
+ */
 static int
 url_decode(const char *src, int src_len, char *dst, int dst_len)
 {
@@ -853,6 +890,10 @@ url_decode(const char *src, int src_len, char *dst, int dst_len)
 	return (j);
 }
 
+/*
+ * Search for a form variable in a given buffer.
+ * Semantic is the same as for mg_get_var().
+ */
 static char *
 get_var(const char *name, const char *buf, int buf_len)
 {
@@ -883,6 +924,12 @@ get_var(const char *name, const char *buf, int buf_len)
 	return (NULL);
 }
 
+/*
+ * Return form data variable.
+ * It can be specified in query string, or in the POST data.
+ * Return NULL if the variable not found, or allocated 0-terminated value.
+ * It is caller's responsibility to free the returned value.
+ */
 char *
 mg_get_var(const struct mg_connection *conn, const char *name)
 {
@@ -904,6 +951,9 @@ mg_get_var(const struct mg_connection *conn, const char *name)
 	return (v2 == NULL ? v1 : v2);
 }
 
+/*
+ * Transform URI to the file name.
+ */
 static void
 make_path(const struct mg_context *ctx, const char *uri,
 		char *buf, size_t buf_len)
@@ -1437,6 +1487,10 @@ check_password(const char *method, const char *ha1, const char *uri,
 	return (!mg_strcasecmp(response, expected_response));
 }
 
+/*
+ * Use the global passwords file, if specified by auth_gpass option,
+ * or search for .htpasswd in the requested directory.
+ */
 static FILE *
 open_auth_file(struct mg_context *ctx, const char *path)
 {
@@ -1548,6 +1602,9 @@ authorize(struct mg_connection *conn, FILE *fp)
 	return (FALSE);
 }
 
+/*
+ * Return TRUE if request is authorised, FALSE otherwise.
+ */
 static bool_t
 check_authorization(struct mg_connection *conn, const char *path)
 {
@@ -1693,6 +1750,9 @@ send_directory(struct mg_connection *conn, const char *path)
 	conn->status = 200;
 }
 
+/*
+ * Send len bytes from the opened file to the client.
+ */
 static void
 send_opened_file_stream(struct mg_connection *conn, FILE *fp, uint64_t len)
 {
@@ -1773,7 +1833,7 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 }
 
 static void
-parse_headers(char **buf, struct mg_request_info *ri)
+parse_http_headers(char **buf, struct mg_request_info *ri)
 {
 	int	i;
 
@@ -1794,7 +1854,7 @@ is_known_http_method(const char *method)
 }
 
 static bool_t
-parse_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
+parse_http_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
 {
 	char	*http_version;
 	int	n, success_code = FALSE;
@@ -1808,7 +1868,7 @@ parse_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
 	    sscanf(http_version, "HTTP/%d.%d%n",
 	    &ri->http_version_major, &ri->http_version_minor, &n) == 2 &&
 	    http_version[n] == '\0') {
-		parse_headers(&buf, ri);
+		parse_http_headers(&buf, ri);
 		ri->remote_port = ntohs(usa->u.sin.sin_port);
 		(void) memcpy(&ri->remote_ip, &usa->u.sin.sin_addr.s_addr, 4);
 		ri->remote_ip = ntohl(ri->remote_ip);
@@ -1934,7 +1994,7 @@ handle_request_body(struct mg_connection *conn, int fd)
 	content_len = get_content_length(conn);
 	expect = mg_get_header(conn, "Expect");
 
-	if (content_len == ~0ULL) {
+	if (content_len == UNKNOWN_CONTENT_LENGTH) {
 		send_error(conn, 411, "Length Required", "");
 	} else if (expect != NULL && mg_strcasecmp(expect, "100-continue")) {
 		send_error(conn, 417, "Expectation Failed", "");
@@ -2150,7 +2210,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	}
 	pbuf = buf;
 	buf[headers_len - 1] = '\0';
-	parse_headers(&pbuf, &ri);
+	parse_http_headers(&pbuf, &ri);
 
 	/* Make up and send the status line */
 	status = get_header(&ri, "Status");
@@ -2940,7 +3000,7 @@ shift_to_next(struct mg_connection *conn, char *buf, int req_len, int *nread)
 	over_len = *nread - req_len;
 	assert(over_len >= 0);
 
-	if (cl == ~0ULL) {
+	if (cl == UNKNOWN_CONTENT_LENGTH) {
 		body_len = 0;
 	} else if (cl < (uint64_t) over_len) {
 		body_len = cl;
@@ -2977,7 +3037,8 @@ process_new_connection(struct mg_connection *conn)
 		if (request_len > 0)
 			buf[request_len - 1] = '\0';
 
-		if (request_len > 0 && parse_request(buf, ri, &conn->rsa)) {
+		if (request_len > 0 &&
+		    parse_http_request(buf, ri, &conn->rsa)) {
 			if (ri->http_version_major != 1 ||
 			     (ri->http_version_major == 1 &&
 			     (ri->http_version_minor < 0 ||
