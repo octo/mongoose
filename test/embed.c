@@ -25,6 +25,7 @@
 
 
 #include <stdlib.h>
+#include <stdio.h>
 #include "mongoose.h"
 
 #ifdef _WIN32
@@ -50,7 +51,6 @@ test_get_var(struct mg_connection *conn, const struct mg_request_info *ri)
 		mg_printf(conn, "Value: [%s]", value);
 		free(value);
 	}
-
 }
 
 static void
@@ -63,7 +63,6 @@ test_get_header(struct mg_connection *conn, const struct mg_request_info *ri)
 	value = mg_get_header(conn, "Host");
 	if (value != NULL)
 		mg_printf(conn, "Value: [%s]", value);
-
 }
 
 static void
