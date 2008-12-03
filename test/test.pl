@@ -218,8 +218,12 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 	fail("PUT content mismatch") unless read_file('put.txt') eq 'abcd';
 	o("PUT /put.txt HTTP/1.0\n$auth_header\nabcd",
 		"HTTP/1.1 411 Length Required", 'PUT 411 error');
-	o("PUT /put.txt HTTP/1.0\nExpect: blah\n$auth_header\nabcd",
+	o("PUT /put.txt HTTP/1.0\nExpect: blah\nContent-Length: 1\n".
+		"$auth_header\nabcd",
 		"HTTP/1.1 417 Expectation Failed", 'PUT 417 error');
+	o("PUT /put.txt HTTP/1.0\nExpect: 100-continue\nContent-Length: 4\n".
+		"$auth_header\nabcd",
+		"HTTP/1.1 100 Continue.+HTTP/1.1 200", 'PUT 100-Continue');
 
 	# Check that CGI's current directory is set to script's directory
 	system("cp env.cgi $dir");
@@ -276,6 +280,7 @@ sub do_embedded_test {
 		'HTTP header \[Content-Length\]: \[3\].'.
 		'Query string: \[xx=yy\].POST data: \[a=b\].'.
 		'Remote IP: \[\d+\].Remote port: \[\d+\].'.
+		'Remote user: \[\]'
 		, 'request_info', 0);
 
 	kill_spawned_child();
