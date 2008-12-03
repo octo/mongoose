@@ -15,11 +15,11 @@ my $test_dir_uri = "test_dir";
 my $test_dir = "$root/$test_dir_uri";
 my $alias = "/aliased=/etc/,/ta=$test_dir";
 my $config = 'mongoose.conf';
-my $exe = 'mongoose';
-my $embed_exe = 'embed';
+my $exe = './mongoose';
+my $embed_exe = './embed';
 my $exit_code = 0;
 
-my @files_to_delete = ('debug.log', 'access.log', $config, 'put.txt',
+my @files_to_delete = ('debug.log', 'access.log', $config, "$root/put.txt",
 	"$test_dir/index.html", "$test_dir/env.cgi", 'binary_file', $embed_exe);
 
 END {
@@ -216,10 +216,12 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 
 	o("PUT /put.txt HTTP/1.0\nContent-Length: 7\n$auth_header\n1234567",
 		"HTTP/1.1 201 OK", 'PUT file, status 201');
-	fail("PUT content mismatch") unless read_file('put.txt') eq '1234567';
+	fail("PUT content mismatch")
+		unless read_file("$root/put.txt") eq '1234567';
 	o("PUT /put.txt HTTP/1.0\nContent-Length: 4\n$auth_header\nabcd",
 		"HTTP/1.1 200 OK", 'PUT file, status 200');
-	fail("PUT content mismatch") unless read_file('put.txt') eq 'abcd';
+	fail("PUT content mismatch")
+		unless read_file("$root/put.txt") eq 'abcd';
 	o("PUT /put.txt HTTP/1.0\n$auth_header\nabcd",
 		"HTTP/1.1 411 Length Required", 'PUT 411 error');
 	o("PUT /put.txt HTTP/1.0\nExpect: blah\nContent-Length: 1\n".
@@ -230,13 +232,13 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 		"HTTP/1.1 100 Continue.+HTTP/1.1 200", 'PUT 100-Continue');
 
 	# Check that CGI's current directory is set to script's directory
-	system("cp env.cgi $test_dir");
+	system("cp $root/env.cgi $test_dir");
 	o("GET /$test_dir_uri/env.cgi HTTP/1.0\n\n",
 		"CURRENT_DIR=.*$test_dir", "CGI chdir()");
 	o("GET /hello.shtml HTTP/1.0\n\n",
-		'inc_begin.*root.*inc_end', 'SSI (include)');
+		'inc_begin.+root.+inc_end', 'SSI (include)');
 	o("GET /hello.shtml HTTP/1.0\n\n",
-		'exec_begin.*env.cgi.*exec_end', 'SSI (exec)');
+		'exec_begin.+Makefile.+exec_end', 'SSI (exec)');
 
 	# Manipulate the passwords file
 	my $path = 'test_htpasswd';
@@ -257,7 +259,7 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 }
 
 sub do_embedded_test {
-	my $cmd = "cc -o $embed_exe embed.c ../mongoose.c -I.. ".
+	my $cmd = "cc -o $embed_exe $root/embed.c mongoose.c -I. ".
 			"-DNO_SSL -lpthread -DPORT=\\\"$port\\\"";
 	print $cmd, "\n";
 	system($cmd) == 0 or fail("Cannot compile embedded unit test");
