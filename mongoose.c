@@ -10,7 +10,7 @@
  *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -67,13 +67,12 @@
 #define	IS_DIRSEP_CHAR(c)	((c) == '/' || (c) == '\\')
 #define	O_NONBLOCK		0
 #define	EWOULDBLOCK		WSAEWOULDBLOCK
-#define	snprintf		_snprintf
-#define	vsnprintf		_vsnprintf
-#define	mkdir(x,y)		_mkdir(x)
-#define	pause()			_pause()
 #define	dlopen(x,y)		LoadLibraryW(x)
 #define	dlsym(x,y)		(void *) GetProcAddress(x,y)
 #define	_POSIX_
+#define	snprintf		_snprintf
+#define	vsnprintf		_vsnprintf
+typedef HANDLE pthread_mutex_t;
 
 #ifdef __LCC__
 #include <stdint.h>
@@ -291,20 +290,6 @@ struct mg_connection {
 #define	FOR_EACH_WORD_IN_LIST(s, len)					\
 	for (; s != NULL && (len = strcspn(s, ",")) != 0;		\
 			s += len, s+= strspn(s, ","))
-
-static void
-mg_lock(struct mg_context *ctx)
-{
-	if (pthread_mutex_lock(&ctx->mutex) != 0)
-		cry("pthread_mutex_lock: %s", strerror(ERRNO));
-}
-
-static void
-mg_unlock(struct mg_context *ctx)
-{
-	if (pthread_mutex_unlock(&ctx->mutex) != 0)
-		cry("pthread_mutex_unlock: %s", strerror(ERRNO));
-}
 
 /*
  * Print error message to the opened error log stream.
@@ -545,20 +530,48 @@ send_error(struct mg_connection *conn, int status, const char *reason,
 }
 
 #ifdef _WIN32
+static int
+pthread_mutex_init(pthread_mutex_t *mutex, void *unused) {
+	*mutex = CreateMutex(NULL, FALSE, NULL);
+	return (*mutex == NULL ? -1 : 0);
+}
 
-#define	stat(x,y)	_stat(x, y)
-#define	mg_open	_open
-#define	mg_remove	remove
-#define	mg_rename	rename
-#define	mg_mkdir	_mkdir
-#define	mg_getcwd	_getcwd
+static int
+pthread_mutex_destroy(pthread_mutex_t *mutex) {
+	CloseHandle(*mutex);
+	return (0);
+}
+
+static int
+pthread_mutex_lock(pthread_mutex_t *mutex) {
+	return (WaitForSingleObject(*mutex, INFINITE) == WAIT_OBJECT_0? 0 : -1);
+}
+
+static int
+pthread_mutex_unlock(pthread_mutex_t *mutex) {
+	return (ReleaseMutex(*mutex) == 0 ? -1 : 0);
+}
+
+
+static void
+fix_directory_separators(char *path)
+{
+	for (; *path != '\0'; path++) {
+		if (*path == '/')
+			*path = '\\';
+		if (*path == '\\')
+			while (path[1] == '\\' || path[1] == '/') 
+				(void) memmove(path + 1,
+				    path + 2, strlen(path + 2) + 1);
+	}
+}
 
 static DIR *
 opendir(const char *name)
 {
-	DIR		*dir = NULL;
-	char		path[FILENAME_MAX];
-	wchar_t		wpath[FILENAME_MAX];
+	DIR	*dir = NULL;
+	char	path[FILENAME_MAX];
+	wchar_t	wpath[FILENAME_MAX];
 
 	if (name == NULL || name[0] == '\0') {
 		errno = EINVAL;
@@ -624,14 +637,14 @@ readdir(DIR *dir)
 static int
 start_thread(void * (*func)(void *), void *param)
 {
-	return (_beginthread(func, 0, param) == 0);
+	return (_beginthread((void (__cdecl *)( void *))func, 0, param) == 0);
 }
 
 static int
 spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
-		char *envp[], int *io, const char *dir)
+		char *envp[], int fd_stdin, int fd_stdout, const char *dir)
 {
-	HANDLE	a[2], b[2], h[2], me;
+	HANDLE	io[2],me;
 	DWORD	flags;
 	char	*p, *interp, cmdline[FILENAME_MAX], line[FILENAME_MAX];
 	FILE	*fp;
@@ -641,12 +654,6 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	me = GetCurrentProcess();
 	flags = DUPLICATE_CLOSE_SOURCE | DUPLICATE_SAME_ACCESS;
 
-	/* FIXME add error checking code here */
-	CreatePipe(&a[0], &a[1], NULL, 0);
-	CreatePipe(&b[0], &b[1], NULL, 0);
-	DuplicateHandle(me, a[0], me, &h[0], 0, TRUE, flags);
-	DuplicateHandle(me, b[1], me, &h[1], 0, TRUE, flags);
-
 	(void) memset(&si, 0, sizeof(si));
 	(void) memset(&pi, 0, sizeof(pi));
 
@@ -654,11 +661,11 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	si.cb		= sizeof(si);
 	si.dwFlags	= STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
 	si.wShowWindow	= SW_HIDE;
-	si.hStdOutput	= h[1];
-	si.hStdInput	= h[0];
+	si.hStdInput	= (HANDLE) _get_osfhandle(fd_stdin);
+	si.hStdOutput	= (HANDLE) _get_osfhandle(fd_stdout);
 
 	/* If CGI file is a script, try to read the interpreter line */
-	interp = c->ctx->options[OPT_CGI_INTERPRETER];
+	interp = conn->ctx->options[OPT_CGI_INTERPRETER];
 	if (interp == NULL) {
 		if ((fp = fopen(prog, "r")) != NULL) {
 			(void) fgets(line, sizeof(line), fp);
@@ -687,22 +694,37 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	 * Spawn reader & writer threads before we create CGI process.
 	 * Otherwise CGI process may die too quickly, loosing the data
 	 */
-	spawn_stdio_thread(sock, b[0], stdinput, 0);
-	spawn_stdio_thread(sock, a[1], stdoutput, c->rem.content_len);
 
 	if (CreateProcessA(NULL, cmdline, NULL, NULL, TRUE,
 	    CREATE_NEW_PROCESS_GROUP, envblk, line, &si, &pi) == 0) {
-		_mg_elog(E_LOG, c,
-		    "redirect: CreateProcess(%s): %d", cmdline, ERRNO);
+		cry("%s: CreateProcess(%s): %d", __func__, cmdline, ERRNO);
 		return (-1);
 	} else {
-		CloseHandle(h[0]);
-		CloseHandle(h[1]);
 		CloseHandle(pi.hThread);
 		CloseHandle(pi.hProcess);
 	}
 
 	return (0);
+}
+
+static int
+pipe(int *fds)
+{
+	return (_pipe(fds, BUFSIZ, _O_BINARY));
+}
+
+static int
+mkdir(const char *path, int mode)
+{
+	char	buf[FILENAME_MAX];
+	wchar_t	wbuf[FILENAME_MAX];
+
+	mg_strlcpy(buf, path, sizeof(buf));
+	fix_directory_separators(buf);
+
+	MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, sizeof(wbuf));
+
+	return (_wmkdir(wbuf));
 }
 
 #else
@@ -785,6 +807,20 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 }
 #endif /* !NO_CGI */
 #endif /* _WIN32 */
+
+static void
+mg_lock(struct mg_context *ctx)
+{
+	if (pthread_mutex_lock(&ctx->mutex) != 0)
+		cry("pthread_mutex_lock: %s", strerror(ERRNO));
+}
+
+static void
+mg_unlock(struct mg_context *ctx)
+{
+	if (pthread_mutex_unlock(&ctx->mutex) != 0)
+		cry("pthread_mutex_unlock: %s", strerror(ERRNO));
+}
 
 /*
  * Write data to the IO channel - opened file descriptor, socket or SSL
@@ -2343,7 +2379,7 @@ do_ssi_include(struct mg_connection *conn, char *tag)
 	} else {
 		cry("Bad SSI #include: [%s]", tag);
 		return;
-	} 
+	}
 
 	if ((fp = fopen(path, "rb")) == NULL) {
 		cry("Cannot open SSI #include: [%s]: %s", tag, strerror(ERRNO));
