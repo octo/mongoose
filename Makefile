@@ -38,5 +38,8 @@ test: test-server
 test-server:
 	perl test/test.pl
 
+release: clean
+	F=mongoose-`perl -lne '/define\s+MONGOOSE_VERSION\s+"(\S+)"/ and print $$1' mongoose.c`.tgz ; cd .. && tar --exclude \*.svn --exclude \*.swp -czf x mongoose && mv x mongoose/$$F
+
 clean:
-	rm -rf *.o *.core $(PROG) *.obj $(PROG).1.txt *.dSYM
+	rm -rf *.o *.core $(PROG) *.obj $(PROG).1.txt *.dSYM *.tgz
