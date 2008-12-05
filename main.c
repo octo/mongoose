@@ -250,8 +250,9 @@ main(int argc, char *argv[])
 	}
 
 	process_command_line_arguments(ctx, argv);
-	if (mg_get_option(ctx, "ports") == NULL)
-		mg_set_option(ctx, "ports", "8080");
+	if (mg_get_option(ctx, "ports") == NULL &&
+	    mg_set_option(ctx, "ports", "8080") != 1)
+		exit(EXIT_FAILURE);
 
 	printf("Mongoose %s started on port(s) [%s], serving directory [%s]\n",
 			mg_version(),
