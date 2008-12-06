@@ -40,7 +40,8 @@ static const char *standard_reply =	"HTTP/1.1 200 OK\r\n"
 					"Connection: close\r\n\r\n";
 
 static void
-test_get_var(struct mg_connection *conn, const struct mg_request_info *ri)
+test_get_var(struct mg_connection *conn, const struct mg_request_info *ri,
+		void *user_data)
 {
 	char *value;
 
@@ -54,7 +55,8 @@ test_get_var(struct mg_connection *conn, const struct mg_request_info *ri)
 }
 
 static void
-test_get_header(struct mg_connection *conn, const struct mg_request_info *ri)
+test_get_header(struct mg_connection *conn, const struct mg_request_info *ri,
+		void *user_data)
 {
 	const char *value;
 
@@ -66,7 +68,8 @@ test_get_header(struct mg_connection *conn, const struct mg_request_info *ri)
 }
 
 static void
-test_get_ri(struct mg_connection *conn, const struct mg_request_info *ri)
+test_get_ri(struct mg_connection *conn, const struct mg_request_info *ri,
+		void *user_data)
 {
 	int	i;
 
@@ -98,10 +101,10 @@ int main(void)
 {
 	ctx = mg_start();
 	mg_set_option(ctx, "ports", PORT);
-	mg_bind(ctx, BIND_TO_URI, "/test_get_header", &test_get_header);
-	mg_bind(ctx, BIND_TO_URI, "/test_get_var", &test_get_var);
-	mg_bind(ctx, BIND_TO_URI, "/test_get_request_info", &test_get_ri);
-	mg_bind(ctx, BIND_TO_URI, "/foo/*", &test_get_ri);
+	mg_bind(ctx, BIND_TO_URI, "/test_get_header", &test_get_header, NULL);
+	mg_bind(ctx, BIND_TO_URI, "/test_get_var", &test_get_var, NULL);
+	mg_bind(ctx, BIND_TO_URI, "/test_get_request_info", &test_get_ri, NULL);
+	mg_bind(ctx, BIND_TO_URI, "/foo/*", &test_get_ri, NULL);
 
 	for (;;)
 		pause();

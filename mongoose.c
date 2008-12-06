@@ -240,6 +240,7 @@ struct callback {
 	enum mg_bind_target	bind_target;
 	const char		*regex;
 	mg_callback_t		func;
+	void			*user_data;
 };
 
 /*
@@ -1987,7 +1988,7 @@ send_index_file(struct mg_connection *conn,
 
 void
 mg_bind(struct mg_context *ctx, enum mg_bind_target bind_target,
-		const char *regex, mg_callback_t func)
+		const char *regex, mg_callback_t func, void *user_data)
 {
 	if (ctx->num_callbacks >= (int) ARRAY_SIZE(ctx->callbacks) - 1) {
 		cry("Too many callbacks! Increase MAX_CALLBACKS.");
@@ -1995,11 +1996,12 @@ mg_bind(struct mg_context *ctx, enum mg_bind_target bind_target,
 		ctx->callbacks[ctx->num_callbacks].bind_target = bind_target;
 		ctx->callbacks[ctx->num_callbacks].regex = regex;
 		ctx->callbacks[ctx->num_callbacks].func = func;
+		ctx->callbacks[ctx->num_callbacks].user_data = user_data;
 		ctx->num_callbacks++;
 	}
 }
 
-static mg_callback_t
+static const struct callback *
 find_callback(const struct mg_context *ctx, const char *regex,
 		enum mg_bind_target bind_target)
 {
@@ -2008,7 +2010,7 @@ find_callback(const struct mg_context *ctx, const char *regex,
 	for (i = 0; i < ctx->num_callbacks; i++)
 		if (ctx->callbacks[i].bind_target == bind_target &&
 		    !strcmp(regex, ctx->callbacks[i].regex))
-			return (ctx->callbacks[i].func);
+			return (&ctx->callbacks[i]);
 
 	return (NULL);
 }
@@ -2486,10 +2488,10 @@ send_ssi(struct mg_connection *conn, const char *path)
 static void
 analyze_request(struct mg_connection *conn)
 {
-	struct stat		st;
-	mg_callback_t	cb;
 	struct mg_request_info *ri = &conn->request_info;
 	char			path[FILENAME_MAX], *uri = (char *) ri->uri;
+	struct stat		st;
+	const struct callback	*cb;
 
 	if ((conn->request_info.query_string = strchr(uri, '?')) != NULL)
 		* (char *) conn->request_info.query_string++ = '\0';
@@ -2502,7 +2504,7 @@ analyze_request(struct mg_connection *conn)
 		if (strcmp(ri->request_method, "POST") ||
 		    (!strcmp(ri->request_method, "POST") &&
 		    handle_request_body(conn, -1)))
-			cb(conn, &conn->request_info);
+			cb->func(conn, &conn->request_info, cb->user_data);
 	} else
 #if !defined(NO_AUTH)
 	if (!check_authorization(conn, path)) {
@@ -2843,11 +2845,14 @@ set_gpass_option(struct mg_context *ctx, const char *path)
 }
 
 static void
-admin_page(struct mg_connection *conn, const struct mg_request_info *ri)
+admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
+		void *user_data)
 {
 	const struct mg_option	*list;
 	const char			*option_name, *option_value;
 	int				i;
+
+	user_data = NULL; /* Unused */
 
 	(void) mg_printf(conn,
 	    "HTTP/1.1 200 OK\r\n"
@@ -2895,7 +2900,7 @@ admin_page(struct mg_connection *conn, const struct mg_request_info *ri)
 static bool_t
 set_admin_uri_option(struct mg_context *ctx, const char *uri)
 {
-	mg_bind(ctx, BIND_TO_URI, uri, &admin_page);
+	mg_bind(ctx, BIND_TO_URI, uri, &admin_page, NULL);
 	return (TRUE);
 }
 

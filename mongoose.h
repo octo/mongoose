@@ -60,7 +60,7 @@ struct mg_request_info {
  * It is passed opaque connection handle, and request information structure.
  */
 typedef void (*mg_callback_t)(struct mg_connection *,
-		const struct mg_request_info *info);
+		const struct mg_request_info *info, void *user_data);
 
 /*
  * Functions dealing with initialization, starting and stopping Mongoose
@@ -99,7 +99,7 @@ int mg_set_option(struct mg_context *, const char *, const char *);
  */
 enum mg_bind_target {BIND_TO_URI, BIND_TO_ERROR_CODE, BIND_TO_SSI_KEYWORD};
 void mg_bind(struct mg_context *ctx, enum mg_bind_target,
-		const char *regex, mg_callback_t func);
+		const char *regex, mg_callback_t func, void *user_data);
 
 /*
  * Functions that can be used within the user URI callback
