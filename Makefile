@@ -25,6 +25,12 @@ rtems:
 	$(CC) -c $(COPT) $(CFLAGS) mongoose.c compat_rtems.c
 	$(AR) -r lib$(PROG).a *.o && ranlib lib$(PROG).a 
 
+# To build on Windows, follow these steps:
+# 1. Download and install Visual Studio Express 2008 to c:\msvc8
+# 2. Download and install Windows SDK to c:\sdk
+# 3. Go to c:\msvc8\vc\bin and start "VIsual Studio 2008 Command prompt"
+#    (or Itanium/amd64 command promt to build x64 version)
+# 4. In the command prompt, go to mongoose directory and do "nmake windows"
 windows:
 	cl /MD /TC /nologo /DNDEBUG /Os \
 		$(SRCS) /link /out:$(PROG).exe \

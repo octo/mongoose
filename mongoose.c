@@ -43,8 +43,6 @@
 #if defined(_WIN32)		/* Windows specific	*/
 
 #include <windows.h>
-#include <winnls.h>
-#include <winsock2.h>
 
 #ifndef _WIN32_WCE
 #include <process.h>
@@ -60,6 +58,7 @@
 
 #endif /* _WIN32_WCE */
 
+#define	__func__		__FUNCTION__
 #define	ERRNO			GetLastError()
 #define	NO_SOCKLEN_T
 #define	SSL_LIB			L"ssleay32.dll"
@@ -70,8 +69,13 @@
 #define	dlopen(x,y)		LoadLibraryW(x)
 #define	dlsym(x,y)		(void *) GetProcAddress(x,y)
 #define	_POSIX_
+#define	R_OK			04 /* for _access() */
 #define	snprintf		_snprintf
 #define	vsnprintf		_vsnprintf
+#define	popen(x, y)		_popen(x, y)
+#define	pclose(x)		_pclose(x)
+#define	access(x, y)		_access(x, y)
+#define	strtoull(x, y, z)	_strtoui64(x, y, z)
 typedef HANDLE pthread_mutex_t;
 
 #ifdef __LCC__
@@ -115,6 +119,7 @@ typedef struct DIR {
 #define	IS_DIRSEP_CHAR(c)	((c) == '/')
 #define	O_BINARY		0
 #define	closesocket(a)		close(a)
+#define	mg_mkdir(x, y)		mkdir(x, y)
 #define	ERRNO			errno
 #define	INVALID_SOCKET		(-1)
 
@@ -715,7 +720,7 @@ pipe(int *fds)
 }
 
 static int
-mkdir(const char *path, int mode)
+mg_mkdir(const char *path, int mode)
 {
 	char	buf[FILENAME_MAX];
 	wchar_t	wbuf[FILENAME_MAX];
@@ -2361,7 +2366,7 @@ put_dir(const char *path)
 		buf[len] = '\0';
 
 		/* Try to create intermediate directory */
-		if (stat(buf, &st) == -1 && mkdir(buf, 0755) != 0)
+		if (stat(buf, &st) == -1 && mg_mkdir(buf, 0755) != 0)
 			return (-1);
 
 		/* Is path itself a directory ? */
@@ -3001,8 +3006,8 @@ static const struct option_setter {
 	{OPT_AUTH_PUT,		NULL},
 #endif /* !NO_AUTH */
 #ifdef _WIN32
-	{OPT_SERVICE,		&set_nt_service},
-	{OPT_HIDE,		&set_systray},
+	{OPT_SERVICE,		NULL},
+	{OPT_HIDE,		NULL},
 #else
 	{OPT_UID,		&set_uid_option},
 #endif /* _WIN32 */

@@ -32,6 +32,7 @@
 
 #ifdef _WIN32
 #define DIRSEP	'\\'
+#define	snprintf _snprintf
 #else
 #include <sys/wait.h>
 #include <unistd.h>		/* For pause() */
@@ -233,7 +234,9 @@ main(int argc, char *argv[])
 		show_usage_and_exit(argv[0]);
 
 #if defined(_WIN32)
+#if 0
 	try_to_run_as_nt_service();
+#endif
 #endif /* _WIN32 */
 
 #ifndef _WIN32
@@ -260,7 +263,7 @@ main(int argc, char *argv[])
 			mg_get_option(ctx, "root"));
 	fflush(stdout);
 	while (exit_flag == 0)
-		pause();
+		(void) getchar();
 
 	mg_stop(ctx);
 	(void) printf("Exit on signal %d\n", exit_flag);
