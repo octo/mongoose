@@ -237,9 +237,9 @@ struct listener {
  * Callback function, and where it is bound to
  */
 struct callback {
-	enum mg_bind_target	bind_target;
 	const char		*regex;
 	mg_callback_t		func;
+	int			status_code;
 	void			*user_data;
 };
 
@@ -271,7 +271,6 @@ struct mg_connection {
 	struct usa	rsa;		/* Remote socket address	*/
 	struct usa	lsa;		/* Local socket address		*/
 	time_t		birth_time;	/* Time connection was accepted	*/
-	int		status;		/* Status code			*/
 	bool_t		free_post_data;	/* post_data was malloc-ed	*/
 	bool_t		keep_alive;	/* Keep-Alive flag		*/
 	uint64_t	num_bytes_sent;	/* Total bytes sent to client	*/
@@ -493,6 +492,8 @@ send_error(struct mg_connection *conn, int status, const char *reason,
 	va_list	ap;
 	int	len;
 
+	conn->request_info.status_code = status;
+
 #if 0
 	struct llhead		*lp;
 	struct error_handler	*e;
@@ -527,7 +528,6 @@ send_error(struct mg_connection *conn, int status, const char *reason,
 	va_end(ap);
 
 	conn->num_bytes_sent += mg_write(conn, buf, len);
-	conn->status = status;
 }
 
 #ifdef _WIN32
@@ -1803,7 +1803,7 @@ send_directory(struct mg_connection *conn, const char *path)
 	}
 
 	conn->num_bytes_sent += mg_printf(conn, "%s", "</table></body></html>");
-	conn->status = 200;
+	conn->request_info.status_code = 200;
 }
 
 /*
@@ -1839,7 +1839,7 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 
 	mime_type = get_mime_type(path);
 	cl = stp->st_size;
-	conn->status = 200;
+	conn->request_info.status_code = 200;
 	range[0] = '\0';
 
 	if ((fp = fopen(path, "rb")) == NULL) {
@@ -1853,7 +1853,7 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 	s = mg_get_header(conn, "Range");
 	r1 = r2 = 0;
 	if (s != NULL && (n = sscanf(s,"bytes=%llu-%llu",&r1, &r2)) > 0) {
-		conn->status = 206;
+		conn->request_info.status_code = 206;
 		(void) fseek(fp, r1, SEEK_SET);
 		cl = n == 2 ? r2 - r1 + 1: cl - r1;
 		(void) mg_snprintf(range, sizeof(range),
@@ -1881,7 +1881,7 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 	    "Connection: %s\r\n"
 	    "Accept-Ranges: bytes\r\n"
 	    "%s\r\n",
-	    conn->status, msg, date, lm, etag, mime_type, cl,
+	    conn->request_info.status_code, msg, date, lm, etag, mime_type, cl,
 	    conn->keep_alive ? "keep-alive" : "close", range);
 
 	send_opened_file_stream(conn, fp, cl);
@@ -1986,31 +1986,70 @@ send_index_file(struct mg_connection *conn,
 	return (FALSE);
 }
 
-void
-mg_bind(struct mg_context *ctx, enum mg_bind_target bind_target,
-		const char *regex, mg_callback_t func, void *user_data)
+static void
+mg_bind(struct mg_context *ctx, const char *regex, int status_code,
+		mg_callback_t func, void *user_data)
 {
 	if (ctx->num_callbacks >= (int) ARRAY_SIZE(ctx->callbacks) - 1) {
 		cry("Too many callbacks! Increase MAX_CALLBACKS.");
 	} else {
-		ctx->callbacks[ctx->num_callbacks].bind_target = bind_target;
 		ctx->callbacks[ctx->num_callbacks].regex = regex;
 		ctx->callbacks[ctx->num_callbacks].func = func;
+		ctx->callbacks[ctx->num_callbacks].status_code = status_code;
 		ctx->callbacks[ctx->num_callbacks].user_data = user_data;
 		ctx->num_callbacks++;
 	}
 }
 
-static const struct callback *
-find_callback(const struct mg_context *ctx, const char *regex,
-		enum mg_bind_target bind_target)
+void
+mg_bind_to_uri(struct mg_context *ctx, const char *regex,
+		mg_callback_t func, void *user_data)
 {
-	int	i;
+	assert(func != NULL);
+	assert(regex != NULL);
+	mg_bind(ctx, regex, -1, func, user_data);
+}
 
-	for (i = 0; i < ctx->num_callbacks; i++)
-		if (ctx->callbacks[i].bind_target == bind_target &&
-		    !strcmp(regex, ctx->callbacks[i].regex))
-			return (&ctx->callbacks[i]);
+void
+mg_bind_to_error_code(struct mg_context *ctx, int error_code,
+		mg_callback_t func, void *user_data)
+{
+	assert(error_code >= 0 && error_code < 1000);
+	assert(func != NULL);
+	mg_bind(ctx, NULL, error_code, func, user_data);
+}
+
+static bool_t
+match_regex(const char *uri, const char *regexp)
+{
+	if (*regexp == '\0')
+		return (*uri == '\0');
+
+	if (*regexp == '*')
+		do {
+			if (match_regex(uri, regexp + 1))
+				return (TRUE);
+		} while (*uri++ != '\0');
+
+	if (*uri != '\0' && *regexp == *uri)
+		return (match_regex(uri + 1, regexp + 1));
+
+	return (FALSE);
+}
+
+static const struct callback *
+find_callback(const struct mg_context *ctx, const char *uri, int status_code)
+{
+	const struct callback	*cb;
+	int			i;
+
+	for (i = 0; i < ctx->num_callbacks; i++) {
+		cb = ctx->callbacks + i;
+		if ((uri != NULL && match_regex(uri, cb->regex)) ||
+		    (uri == NULL &&
+		     (cb->status_code == 0 || cb->status_code == status_code)))
+		    return (cb);
+	}
 
 	return (NULL);
 }
@@ -2277,8 +2316,9 @@ send_cgi(struct mg_connection *conn, const char *prog)
 
 	/* Make up and send the status line */
 	status = get_header(&ri, "Status");
-	conn->status = status == NULL ? 200 : atoi(status);
-	(void) mg_printf(conn, "HTTP/1.1 %d OK\r\n", conn->status);
+	conn->request_info.status_code = status == NULL ? 200 : atoi(status);
+	(void) mg_printf(conn, "HTTP/1.1 %d OK\r\n",
+	    conn->request_info.status_code);
 
 	/* Send headers */
 	for (i = 0; i < ri.num_headers; i++)
@@ -2338,7 +2378,7 @@ put_file(struct mg_connection *conn, const char *path)
 	struct stat	st;
 	int		rc, fd;
 
-	conn->status = stat(path, &st) == 0 ? 200 : 201;
+	conn->request_info.status_code = stat(path, &st) == 0 ? 200 : 201;
 
 	if (mg_get_header(conn, "Range")) {
 		send_error(conn, 501, "Not Implemented",
@@ -2354,7 +2394,8 @@ put_file(struct mg_connection *conn, const char *path)
 	} else {
 		set_close_on_exec(fd);
 		if (handle_request_body(conn, fd))
-			send_error(conn, conn->status, "OK", "");
+			send_error(conn, conn->request_info.status_code,
+			    "OK", "");
 		(void) close(fd);
 	}
 }
@@ -2500,7 +2541,7 @@ analyze_request(struct mg_connection *conn)
 	remove_double_dots(uri);
 	make_path(conn->ctx, uri, path, sizeof(path));
 
-	if ((cb = find_callback(conn->ctx, uri, BIND_TO_URI)) != NULL) {
+	if ((cb = find_callback(conn->ctx, uri, -1)) != NULL) {
 		if (strcmp(ri->request_method, "POST") ||
 		    (!strcmp(ri->request_method, "POST") &&
 		    handle_request_body(conn, -1)))
@@ -2642,7 +2683,7 @@ log_access(const struct mg_connection *conn)
 	    ri->request_method ? ri->request_method : "-",
 	    ri->uri ? ri->uri : "-",
 	    ri->http_version_major, ri->http_version_minor,
-	    conn->status, conn->num_bytes_sent);
+	    conn->request_info.status_code, conn->num_bytes_sent);
 	log_header(conn, "Referer", conn->ctx->access_log);
 	log_header(conn, "User-Agent", conn->ctx->access_log);
 	(void) fputc('\n', conn->ctx->access_log);
@@ -2900,7 +2941,7 @@ admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
 static bool_t
 set_admin_uri_option(struct mg_context *ctx, const char *uri)
 {
-	mg_bind(ctx, BIND_TO_URI, uri, &admin_page, NULL);
+	mg_bind_to_uri(ctx, uri, &admin_page, NULL);
 	return (TRUE);
 }
 
@@ -3061,7 +3102,7 @@ reset_connection_attributes(struct mg_connection *conn)
 {
 	reset_per_request_attributes(conn);
 	conn->free_post_data = FALSE;
-	conn->status = -1;
+	conn->request_info.status_code = -1;
 	conn->keep_alive = FALSE;
 	conn->num_bytes_sent = 0;
 	(void) memset(&conn->request_info, 0, sizeof(conn->request_info));

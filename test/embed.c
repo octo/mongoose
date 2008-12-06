@@ -101,11 +101,11 @@ int main(void)
 {
 	ctx = mg_start();
 	mg_set_option(ctx, "ports", PORT);
-	mg_bind(ctx, BIND_TO_URI, "/test_get_header", &test_get_header, NULL);
-	mg_bind(ctx, BIND_TO_URI, "/test_get_var", &test_get_var, NULL);
-	mg_bind(ctx, BIND_TO_URI, "/test_get_request_info", &test_get_ri, NULL);
-	mg_bind(ctx, BIND_TO_URI, "/foo/*", &test_get_ri, NULL);
+	mg_bind_to_uri(ctx, "/test_get_header", &test_get_header, NULL);
+	mg_bind_to_uri(ctx, "/test_get_var", &test_get_var, NULL);
+	mg_bind_to_uri(ctx, "/test_get_request_info", &test_get_ri, NULL);
+	mg_bind_to_uri(ctx, "/foo/*", &test_get_ri, NULL);
 
 	for (;;)
-		pause();
+		(void) getchar();
 }

@@ -47,12 +47,23 @@ struct mg_request_info {
 	int		post_data_len;		/* POST buffer length	*/
 	int		http_version_major;
 	int		http_version_minor;
+	int		status_code;		/* HTTP status code	*/
 	int		num_headers;		/* Number of headers	*/
 #define	MAX_HTTP_HEADERS	64
 	struct mg_header {
 		const char	*name;		/* HTTP header name	*/
 		const char	*value;		/* HTTP header value	*/
 	} http_headers[MAX_HTTP_HEADERS];
+};
+
+/*
+ * Mongoose configuration option.
+ * Array of those is returned by mg_get_option_list().
+ */
+struct mg_option {
+	const char	*name;
+	const char	*description;
+	const char	*default_value;
 };
 
 /*
@@ -70,36 +81,23 @@ typedef void (*mg_callback_t)(struct mg_connection *,
  * mg_set_option	Set an option for the running context.
  * mg_get_option	Get an option for the running context.
  * mg_get_option_list	Get a list of all known options.
- * mg_bind		Associate user function with URI, or error, or SSI.
+ * mg_bind_to_uri	Associate user function with URI, or error, or SSI.
  *			Passing NULL as function pointer means un-bind.
  *			'*' in regex matches zero or more characters.
+ * mg_bind_to_error_code Associate user function with HTTP error code.
+ *			Passing 0 as error code binds function to all codes.
+ *			Error code is passed as status_code in request info.
  */
 
 struct mg_context *mg_start(void);
 void mg_stop(struct mg_context *);
-
-/*
- * Altering Mongoose configuration:
- * Getting list of all available options and their descriptions,
- * getting current value of an option, and setting new value.
- */
-struct mg_option {
-	const char	*name;
-	const char	*description;
-	const char	*default_value;
-};
 const struct mg_option *mg_get_option_list(void);
 const char *mg_get_option(struct mg_context *, const char *);
 int mg_set_option(struct mg_context *, const char *, const char *);
-
-/*
- * User-defined function can be bound to the particular URI,
- * or HTTP error code, or SSI keyword. In all cases, wildcards can be used,
- * where '*' stands for 'zero or more characters'.
- */
-enum mg_bind_target {BIND_TO_URI, BIND_TO_ERROR_CODE, BIND_TO_SSI_KEYWORD};
-void mg_bind(struct mg_context *ctx, enum mg_bind_target,
-		const char *regex, mg_callback_t func, void *user_data);
+void mg_bind_to_uri(struct mg_context *ctx, const char *regex,
+		mg_callback_t func, void *user_data);
+void mg_bind_to_error_code(struct mg_context *ctx, int error_code,
+		mg_callback_t func, void *user_data);
 
 /*
  * Functions that can be used within the user URI callback
