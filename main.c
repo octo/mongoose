@@ -31,16 +31,22 @@
 #include "mongoose.h"
 
 #ifdef _WIN32
-#define DIRSEP	'\\'
-#define	snprintf _snprintf
+#include <windows.h>
+#define DIRSEP			'\\'
+#define	snprintf		_snprintf
+#define	pause()			Sleep(INT_MAX)
 #else
 #include <sys/wait.h>
 #include <unistd.h>		/* For pause() */
 #define DIRSEP '/'
 #endif /* _WIN32 */
 
-static int  exit_flag;	                /* Program termination flag	*/
-static struct mg_context	*ctx;   /* Mongoose context		*/
+static int exit_flag;	                /* Program termination flag	*/
+static struct mg_context *ctx;		/* Mongoose context		*/
+
+#if !defined(CONFIG_FILE)
+#define	CONFIG_FILE		"mongoose.conf"
+#endif /* !CONFIG_FILE */
 
 static void
 signal_handler(int sig_num)
@@ -144,10 +150,28 @@ mg_edit_passwords(const char *fname, const char *domain,
 #endif /* NO_AUTH */
 
 static void
+set_temporary_opt_value(const struct mg_option *opts, char **vals,
+		const char *name, const char *val)
+{
+	int	i;
+
+	for (i = 0; opts[i].name != NULL; i++)
+		if (!strcmp(opts[i].name, name)) {
+			if (vals[i] != NULL)
+				free(vals[i]);
+			vals[i] = strdup(val);
+			return;
+		}
+	(void) fprintf(stderr, "No such option: \"%s\"\n", name);
+	exit(EXIT_FAILURE);
+}
+
+static void
 process_command_line_arguments(struct mg_context *ctx, char *argv[])
 {
-	const char	*config_file = "mongoose.conf";
-	char		line[BUFSIZ], opt[BUFSIZ],
+	const struct mg_option *opts;
+	const char	*config_file = CONFIG_FILE;
+	char		line[BUFSIZ], opt[BUFSIZ], *vals[100],
 				val[BUFSIZ], path[FILENAME_MAX], *p;
 	FILE		*fp;
 	size_t		i, line_no = 0;
@@ -181,6 +205,10 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
+	/* Reset temporary value holders */
+	(void) memset(vals, 0, sizeof(vals));
+	opts = mg_get_option_list();
+
 	if (fp != NULL) {
 		(void) printf("Loading config file %s\n", config_file);
 
@@ -199,11 +227,7 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 				exit(EXIT_FAILURE);
 			}
 
-			if (mg_set_option(ctx, opt, val) != 1) {
-				(void) fprintf(stderr,
-				    "Error setting option \"%s\"\n", opt);
-				exit(EXIT_FAILURE);
-			}
+			set_temporary_opt_value(opts, vals, opt, val);
 		}
 
 		(void) fclose(fp);
@@ -211,13 +235,84 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 
 	/* Now pass through the command line options */
 	for (i = 1; argv[i] != NULL && argv[i][0] == '-'; i += 2)
-		if (mg_set_option(ctx,
-		    &argv[i][1], argv[i + 1]) != 1) {
-			(void) fprintf(stderr,
-			    "Error setting option \"%s\"\n", &argv[i][1]);
-			exit(EXIT_FAILURE);
+		set_temporary_opt_value(opts, vals, &argv[i][1], argv[i + 1]);
+
+	/* Finally, call option setters */
+	for (i = 0; opts[i].name != NULL; i++) {
+		if (vals[i] != NULL) {
+			if (mg_set_option(ctx, opts[i].name, vals[i]) != 1) {
+				(void) fprintf(stderr, "Error setting "
+				    "option \"%s\"\n", opts[i].name);
+				exit(EXIT_FAILURE);
+			}
+			free(vals[i]);
 		}
+	}
 }
+
+#ifdef _WIN32
+static SERVICE_STATUS		ss; 
+static SERVICE_STATUS_HANDLE	hStatus; 
+static SERVICE_DESCRIPTION	service_descr = {"Web server"};
+static char			service_name[20];
+
+static void WINAPI
+ControlHandler(DWORD code) 
+{ 
+	if (code == SERVICE_CONTROL_STOP || code == SERVICE_CONTROL_SHUTDOWN) {
+		ss.dwWin32ExitCode = 0; 
+		ss.dwCurrentState = SERVICE_STOPPED; 
+	} 
+ 
+	SetServiceStatus(hStatus, &ss);
+}
+
+static void WINAPI
+ServiceMain(int argc, char *argv[]) 
+{
+	char path[MAX_PATH], *p, *av[] = {"mongoose_service", path, NULL};
+	struct mg_context *ctx;
+
+	ss.dwServiceType      = SERVICE_WIN32; 
+	ss.dwCurrentState     = SERVICE_RUNNING; 
+	ss.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
+
+	hStatus = RegisterServiceCtrlHandler(service_name, ControlHandler);
+	SetServiceStatus(hStatus, &ss); 
+
+	GetModuleFileName(NULL, path, sizeof(path));
+
+	if ((p = strrchr(path, DIRSEP)) != NULL)
+		*++p = '\0';
+
+	strcat(path, CONFIG_FILE);	/* woo ! */
+
+	Sleep(3000);
+	if ((ctx = mg_start()) != NULL) {
+		process_command_line_arguments(ctx, av);
+
+		while (ss.dwCurrentState == SERVICE_RUNNING)
+			Sleep(1000);
+		mg_stop(ctx);
+	}
+
+	ss.dwCurrentState  = SERVICE_STOPPED; 
+	ss.dwWin32ExitCode = -1; 
+	SetServiceStatus(hStatus, &ss); 
+}
+
+static void
+try_to_run_as_nt_service(void)
+{
+	static SERVICE_TABLE_ENTRY service_table[] = {
+		{service_name, (LPSERVICE_MAIN_FUNCTION) ServiceMain},
+		{NULL, NULL}
+	};
+
+	if (StartServiceCtrlDispatcher(service_table))
+		exit(EXIT_SUCCESS);
+}
+#endif /* _WIN32 */
 
 int
 main(int argc, char *argv[])
@@ -234,9 +329,9 @@ main(int argc, char *argv[])
 		show_usage_and_exit(argv[0]);
 
 #if defined(_WIN32)
-#if 0
+	{FILE  *fp = fopen("d:\\mongoose\\a.txt", "a+"); fprintf(fp, "hello"); fclose(fp); }
+	(void) sprintf(service_name, "Mongoose %s", mg_version());
 	try_to_run_as_nt_service();
-#endif
 #endif /* _WIN32 */
 
 #ifndef _WIN32
@@ -263,7 +358,7 @@ main(int argc, char *argv[])
 			mg_get_option(ctx, "root"));
 	fflush(stdout);
 	while (exit_flag == 0)
-		(void) getchar();
+		pause();
 
 	mg_stop(ctx);
 	(void) printf("Exit on signal %d\n", exit_flag);
