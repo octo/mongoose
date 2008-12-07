@@ -2970,8 +2970,6 @@ static const struct mg_option known_options[] = {
 	{"auth_PUT", "PUT,DELETE auth file", NULL},
 #endif /* !NO_AUTH */
 #ifdef _WIN32
-	{"service", "Manage WinNNT service (install|uninstall)", NULL},
-	{"systray", "Hide console, show icon on systray", "no"},
 #else
 	{"uid", "\tRun as user", NULL},
 #endif /* _WIN32 */
@@ -3006,8 +3004,6 @@ static const struct option_setter {
 	{OPT_AUTH_PUT,		NULL},
 #endif /* !NO_AUTH */
 #ifdef _WIN32
-	{OPT_SERVICE,		NULL},
-	{OPT_HIDE,		NULL},
 #else
 	{OPT_UID,		&set_uid_option},
 #endif /* _WIN32 */
