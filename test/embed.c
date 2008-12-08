@@ -28,12 +28,6 @@
 #include <stdio.h>
 #include "mongoose.h"
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
-
 static struct mg_context *ctx;
 static const char *standard_reply =	"HTTP/1.1 200 OK\r\n"
 					"Content-Type: text/plain\r\n"
@@ -97,14 +91,41 @@ test_get_ri(struct mg_connection *conn, const struct mg_request_info *ri,
 			ri->remote_user ? ri->remote_user : "");
 }
 
+static void
+test_error(struct mg_connection *conn, const struct mg_request_info *ri,
+		void *user_data)
+{
+	const char *value;
+
+	mg_printf(conn, "%s", standard_reply);
+	mg_printf(conn, "Error: [%d]", ri->status_code);
+}
+
+static void
+test_user_data(struct mg_connection *conn, const struct mg_request_info *ri,
+		void *user_data)
+{
+	const char *value;
+
+	mg_printf(conn, "%s", standard_reply);
+	mg_printf(conn, "User data: [%d]", * (int *) user_data);
+}
+
 int main(void)
 {
+	int	user_data = 1234;
+
 	ctx = mg_start();
 	mg_set_option(ctx, "ports", PORT);
+
 	mg_bind_to_uri(ctx, "/test_get_header", &test_get_header, NULL);
 	mg_bind_to_uri(ctx, "/test_get_var", &test_get_var, NULL);
 	mg_bind_to_uri(ctx, "/test_get_request_info", &test_get_ri, NULL);
 	mg_bind_to_uri(ctx, "/foo/*", &test_get_ri, NULL);
+	mg_bind_to_uri(ctx, "/test_user_data", &test_user_data, &user_data);
+
+	mg_bind_to_error_code(ctx, 404, &test_error, NULL);
+	mg_bind_to_error_code(ctx, 0, &test_error, NULL);
 
 	for (;;)
 		(void) getchar();

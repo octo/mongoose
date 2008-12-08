@@ -289,6 +289,10 @@ sub do_embedded_test {
 		'Remote IP: \[\d+\].Remote port: \[\d+\].'.
 		'Remote user: \[\]'
 		, 'request_info', 0);
+	o("GET /not_exist HTTP/1.0\n\n", 'Error: \[404\]', '404 handler', 0);
+	o("bad request\n\n", 'Error: \[400\]', '* error handler', 0);
+	o("GET /test_user_data HTTP/1.0\n\n",
+		'User data: \[1234\]', 'user data in callback', 0);
 
 	kill_spawned_child();
 }
