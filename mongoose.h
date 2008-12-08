@@ -29,7 +29,7 @@
 extern "C" {
 #endif /* __cplusplus */
 
-struct mg_context;		/* Handle for the HTTP service itself	*/
+struct mg_context;	/* Handle for the HTTP service itself	*/
 struct mg_connection;	/* Handle for the individual connection	*/
 
 /*
@@ -98,6 +98,13 @@ void mg_bind_to_uri(struct mg_context *ctx, const char *regex,
 		mg_callback_t func, void *user_data);
 void mg_bind_to_error_code(struct mg_context *ctx, int error_code,
 		mg_callback_t func, void *user_data);
+
+/*
+ * Needed only if SSL certificate asks for a password.
+ * Instead of prompting for a password, specified function will be called.
+ */
+typedef int (*mg_spcb_t)(char *buf, int num, int w, void *key); 
+void mg_set_ssl_password_callback(struct mg_context *ctx, mg_spcb_t func);
 
 /*
  * Functions that can be used within the user URI callback

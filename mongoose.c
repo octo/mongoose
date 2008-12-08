@@ -195,6 +195,8 @@ struct ssl_func {
 		const char *, int)) FUNC(11))((x), (y), (z))
 #define	SSL_CTX_use_certificate_file(x,y,z)	(* (int (*)(SSL_CTX *, \
 		const char *, int)) FUNC(12))((x), (y), (z))
+#define SSL_CTX_set_default_passwd_cb(x,y) \
+	(* (void (*)(SSL_CTX *, mg_spcb_t))FUNC(13))((x),(y))
 
 struct ssl_func	ssl_sw[] = {
 	{"SSL_free",			NULL},
@@ -210,6 +212,7 @@ struct ssl_func	ssl_sw[] = {
 	{"SSL_library_init",		NULL},
 	{"SSL_CTX_use_PrivateKey_file",	NULL},
 	{"SSL_CTX_use_certificate_file",NULL},
+	{"SSL_CTX_set_default_passwd_cb",NULL},
 	{NULL,				NULL}
 };
 
@@ -266,6 +269,8 @@ struct mg_context {
 
 	char	*options[NUM_OPTIONS];	/* Configured opions		*/
 	pthread_mutex_t	mutex;		/* Option setter/getter guard	*/
+
+	mg_spcb_t	ssl_password_callback;
 };
 
 struct mg_connection {
@@ -2791,6 +2796,12 @@ set_uid_option(struct mg_context *ctx, const char *uid)
 }
 
 #if !defined(NO_SSL)
+void
+mg_set_ssl_password_callback(struct mg_context *ctx, mg_spcb_t func)
+{
+	ctx->ssl_password_callback = func;
+}
+
 /*
  * Dynamically load SSL library. Set up ctx->ssl_ctx pointer.
  */
@@ -2826,9 +2837,14 @@ set_ssl_option(struct mg_context *ctx, const char *pem)
 
 	if ((CTX = SSL_CTX_new(SSLv23_server_method())) == NULL)
 		cry("SSL_CTX_new error");
-	else if (SSL_CTX_use_certificate_file(CTX, pem, SSL_FILETYPE_PEM) == 0)
+	else if (ctx->ssl_password_callback != NULL)
+		SSL_CTX_set_default_passwd_cb(CTX, ctx->ssl_password_callback);
+
+	if (CTX != NULL && SSL_CTX_use_certificate_file(
+	    CTX, pem, SSL_FILETYPE_PEM) == 0)
 		cry("cannot open %s", pem);
-	else if (SSL_CTX_use_PrivateKey_file(CTX, pem, SSL_FILETYPE_PEM) == 0)
+	else if (CTX != NULL && SSL_CTX_use_PrivateKey_file(
+	    CTX, pem, SSL_FILETYPE_PEM) == 0)
 		cry("cannot open %s", pem);
 	else
 		retval = TRUE;
