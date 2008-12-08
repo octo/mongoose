@@ -1865,7 +1865,7 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 	const char	*mime_type, *s;
 	time_t		curtime = time(NULL);
 	FILE		*fp;
-	uint64_t	cl, r1, r2;
+	unsigned long long cl, r1, r2;
 	int		n;
 
 	mime_type = get_mime_type(path);
@@ -1883,15 +1883,13 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 	/* If Range: header specified, act accordingly */
 	s = mg_get_header(conn, "Range");
 	r1 = r2 = 0;
-	if (s != NULL && (n = sscanf(s,"bytes=%llu-%llu",&r1, &r2)) > 0) {
+	if (s != NULL && (n = sscanf(s,"bytes=%llu-%llu", &r1, &r2)) > 0) {
 		conn->request_info.status_code = 206;
 		(void) fseek(fp, r1, SEEK_SET);
 		cl = n == 2 ? r2 - r1 + 1: cl - r1;
 		(void) mg_snprintf(range, sizeof(range),
 		    "Content-Range: bytes %llu-%llu/%llu\r\n",
-		    (unsigned long long) r1,
-		    (unsigned long long) (r1 + cl - 1),
-		    (unsigned long long) cl);
+		    r1, r1 + cl - 1, cl);
 		msg = "Partial Content";
 	}
 
