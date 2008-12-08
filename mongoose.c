@@ -486,6 +486,41 @@ match_extension(const char *path, const char *ext_list)
 	return (FALSE);
 }
 
+static bool_t
+match_regex(const char *uri, const char *regexp)
+{
+	if (*regexp == '\0')
+		return (*uri == '\0');
+
+	if (*regexp == '*')
+		do {
+			if (match_regex(uri, regexp + 1))
+				return (TRUE);
+		} while (*uri++ != '\0');
+
+	if (*uri != '\0' && *regexp == *uri)
+		return (match_regex(uri + 1, regexp + 1));
+
+	return (FALSE);
+}
+
+static const struct callback *
+find_callback(const struct mg_context *ctx, const char *uri, int status_code)
+{
+	const struct callback	*cb;
+	int			i;
+
+	for (i = 0; i < ctx->num_callbacks; i++) {
+		cb = ctx->callbacks + i;
+		if ((uri != NULL && cb->regex != NULL &&
+		    match_regex(uri, cb->regex)) || (uri == NULL &&
+		     (cb->status_code == 0 || cb->status_code == status_code)))
+		    return (cb);
+	}
+
+	return (NULL);
+}
+
 /*
  * Send error message back to a client.
  */
@@ -493,46 +528,32 @@ static void
 send_error(struct mg_connection *conn, int status, const char *reason,
 		const char *fmt, ...)
 {
-	char	buf[BUFSIZ];
-	va_list	ap;
-	int	len;
+	const struct callback	*cb;
+	char		buf[BUFSIZ];
+	va_list		ap;
+	int		len;
 
 	conn->request_info.status_code = status;
 
-#if 0
-	struct llhead		*lp;
-	struct error_handler	*e;
-	LL_FOREACH(&c->ctx->error_handlers, lp) {
-		e = LL_ENTRY(lp, struct error_handler, link);
+	/* If error handler is set, call it. Otherwise, send error message */
+	if ((cb = find_callback(conn->ctx, NULL, status)) != NULL) {
+		cb->func(conn, &conn->request_info, cb->user_data);
+	} else {
+		(void) mg_printf(conn,
+		    "HTTP/1.1 %d %s\r\n"
+		    "Content-Type: text/plain\r\n"
+		    "Connection: close\r\n"
+		    "\r\n", status, reason);
 
-		if (e->code == status) {
-			if (c->loc.io_class != NULL &&
-			    c->loc.io_class->close != NULL)
-				c->loc.io_class->close(&c->loc);
-			io_clear(&c->loc.io);
-#if 0
-			setup_embedded_stream(c,
-			    e->callback, e->callback_data);
-#endif
-			return;
-		}
+		conn->num_bytes_sent += mg_printf(conn,
+		    "Error %d: %s\n", status, reason);
+
+		va_start(ap, fmt);
+		len = mg_vsnprintf(buf, sizeof(buf), fmt, ap);
+		va_end(ap);
+
+		conn->num_bytes_sent += mg_write(conn, buf, len);
 	}
-#endif
-
-	(void) mg_printf(conn,
-	    "HTTP/1.1 %d %s\r\n"
-	    "Content-Type: text/plain\r\n"
-	    "Connection: close\r\n"
-	    "\r\n", status, reason);
-
-	conn->num_bytes_sent += mg_printf(conn,
-	    "Error %d: %s\n", status, reason);
-
-	va_start(ap, fmt);
-	len = mg_vsnprintf(buf, sizeof(buf), fmt, ap);
-	va_end(ap);
-
-	conn->num_bytes_sent += mg_write(conn, buf, len);
 }
 
 #ifdef _WIN32
@@ -2022,41 +2043,6 @@ mg_bind_to_error_code(struct mg_context *ctx, int error_code,
 	assert(error_code >= 0 && error_code < 1000);
 	assert(func != NULL);
 	mg_bind(ctx, NULL, error_code, func, user_data);
-}
-
-static bool_t
-match_regex(const char *uri, const char *regexp)
-{
-	if (*regexp == '\0')
-		return (*uri == '\0');
-
-	if (*regexp == '*')
-		do {
-			if (match_regex(uri, regexp + 1))
-				return (TRUE);
-		} while (*uri++ != '\0');
-
-	if (*uri != '\0' && *regexp == *uri)
-		return (match_regex(uri + 1, regexp + 1));
-
-	return (FALSE);
-}
-
-static const struct callback *
-find_callback(const struct mg_context *ctx, const char *uri, int status_code)
-{
-	const struct callback	*cb;
-	int			i;
-
-	for (i = 0; i < ctx->num_callbacks; i++) {
-		cb = ctx->callbacks + i;
-		if ((uri != NULL && cb->regex != NULL &&
-		    match_regex(uri, cb->regex)) || (uri == NULL &&
-		     (cb->status_code == 0 || cb->status_code == status_code)))
-		    return (cb);
-	}
-
-	return (NULL);
 }
 
 static int
