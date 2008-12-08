@@ -1884,7 +1884,9 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 		cl = n == 2 ? r2 - r1 + 1: cl - r1;
 		(void) mg_snprintf(range, sizeof(range),
 		    "Content-Range: bytes %llu-%llu/%llu\r\n",
-		    r1, r1 + cl - 1, cl);
+		    (unsigned long long) r1,
+		    (unsigned long long) (r1 + cl - 1),
+		    (unsigned long long) cl);
 		msg = "Partial Content";
 	}
 
@@ -2674,7 +2676,8 @@ log_access(const struct mg_connection *conn)
 	    ri->request_method ? ri->request_method : "-",
 	    ri->uri ? ri->uri : "-",
 	    ri->http_version_major, ri->http_version_minor,
-	    conn->request_info.status_code, conn->num_bytes_sent);
+	    conn->request_info.status_code,
+	    (unsigned long long) conn->num_bytes_sent);
 	log_header(conn, "Referer", conn->ctx->access_log);
 	log_header(conn, "User-Agent", conn->ctx->access_log);
 	(void) fputc('\n', conn->ctx->access_log);
