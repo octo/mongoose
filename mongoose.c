@@ -2050,8 +2050,8 @@ find_callback(const struct mg_context *ctx, const char *uri, int status_code)
 
 	for (i = 0; i < ctx->num_callbacks; i++) {
 		cb = ctx->callbacks + i;
-		if ((uri != NULL && match_regex(uri, cb->regex)) ||
-		    (uri == NULL &&
+		if ((uri != NULL && cb->regex != NULL &&
+		    match_regex(uri, cb->regex)) || (uri == NULL &&
 		     (cb->status_code == 0 || cb->status_code == status_code)))
 		    return (cb);
 	}
