@@ -861,18 +861,20 @@ mg_unlock(struct mg_context *ctx)
 static uint64_t
 push(int fd, int sock, void *ssl, const char *buf, uint64_t len)
 {
-	uint64_t	sent;
+	uint64_t	sent, to_be_sent;
+	size_t		to_write;
 	int		n;
 
 	sent = 0;
 	while (sent < len) {
+		to_be_sent = len - sent;
 
 		if (ssl != NULL) {
-			n = SSL_write(ssl, buf + sent, len - sent);
+			n = SSL_write(ssl, buf + sent, (int) to_be_sent);
 		} else if (fd != -1) {
-			n = write(fd, buf + sent, len - sent);
+			n = write(fd, buf + sent, (size_t) to_be_sent);
 		} else {
-			n = send(sock, buf + sent, len - sent, 0);
+			n = send(sock, buf + sent, (size_t) to_be_sent, 0);
 		}
 
 		if (n < 0) {
@@ -898,9 +900,9 @@ pull(int fd, int sock, void *ssl, char *buf, int len)
 	if (ssl != NULL) {
 		nread = SSL_read(ssl, buf, len);
 	} else if (fd != -1) {
-		nread = read(fd, buf, len);
+		nread = read(fd, buf, (size_t) len);
 	} else {
-		nread = recv(sock, buf, len, 0);
+		nread = recv(sock, buf, (size_t) len, 0);
 	}
 
 	if (nread < 0)
@@ -912,7 +914,7 @@ pull(int fd, int sock, void *ssl, char *buf, int len)
 int
 mg_write(struct mg_connection *conn, const void *buf, int len)
 {
-	return (push(-1, conn->sock, conn->ssl, buf, len));
+	return (push(-1, conn->sock, conn->ssl, buf, (uint64_t) len));
 }
 
 int
@@ -982,7 +984,7 @@ get_var(const char *name, const char *buf, int buf_len)
 {
 	const char	*p, *e, *s;
 	char		tmp[BUFSIZ];
-	int		var_len, value_len;
+	size_t		var_len, value_len;
 
 	var_len = strlen(name);
 	e = buf + buf_len;
@@ -1714,7 +1716,7 @@ check_authorization(struct mg_connection *conn, const char *path)
 			if (n > (int) sizeof(protected_path) - 1)
 				n = sizeof(protected_path) - 1;
 
-			mg_strlcpy(protected_path, p + 1, n);
+			mg_strlcpy(protected_path, p + 1, (size_t) n);
 
 			if ((fp = fopen(protected_path, "r")) == NULL)
 				cry("check_auth: cannot open %s: %s",
@@ -1850,7 +1852,7 @@ send_opened_file_stream(struct mg_connection *conn, FILE *fp, uint64_t len)
 		n = sizeof(buf);
 		if ((uint64_t) n > len)
 			n = len;
-		if ((n = fread(buf, 1, n, fp)) <= 0)
+		if ((n = fread(buf, 1, (size_t) n, fp)) <= 0)
 			break;
 		conn->num_bytes_sent += mg_write(conn, buf, n);
 		len -= n;
@@ -1885,7 +1887,7 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 	r1 = r2 = 0;
 	if (s != NULL && (n = sscanf(s,"bytes=%llu-%llu", &r1, &r2)) > 0) {
 		conn->request_info.status_code = 206;
-		(void) fseek(fp, r1, SEEK_SET);
+		(void) fseek(fp, (long) r1, SEEK_SET);
 		cl = n == 2 ? r2 - r1 + 1: cl - r1;
 		(void) mg_snprintf(range, sizeof(range),
 		    "Content-Range: bytes %llu-%llu/%llu\r\n",
@@ -1977,7 +1979,7 @@ read_request(int fd, int sock, void *ssl, char *buf, int buf_size, int *nread)
 			break;
 		} else {
 			*nread += n;
-			request_len = get_request_len(buf, *nread);
+			request_len = get_request_len(buf, (size_t) *nread);
 		}
 	}
 
@@ -2069,7 +2071,7 @@ append_chunk(struct mg_request_info *ri, int fd, const char *buf, int len)
 		(void) memcpy((char *) ri->post_data + ri->post_data_len,
 		    buf, len);
 		ri->post_data_len += len;
-	} else if (push(fd, -1, NULL, buf, len) != (uint64_t) len) {
+	} else if (push(fd, -1, NULL, buf, (uint64_t) len) != (uint64_t) len) {
 		ret_code = FALSE;
 	}
 
@@ -2116,7 +2118,7 @@ handle_request_body(struct mg_connection *conn, int fd)
 				    tmp, already_read);
 			} else {
 				(void) push(fd, -1, NULL,
-				    ri->post_data, already_read);
+				    ri->post_data, (uint64_t) already_read);
 			}
 
 			content_len -= already_read;
@@ -2161,7 +2163,7 @@ addenv(struct cgi_env_block *block, const char *fmt, ...)
 	added = block->buf + block->len;
 
 	va_start(ap, fmt);
-	n = mg_vsnprintf(added, space, fmt, ap);
+	n = mg_vsnprintf(added, (size_t) space, fmt, ap);
 	va_end(ap);
 
 	if (n > 0 && n < space &&
@@ -2424,7 +2426,7 @@ do_ssi_include(struct mg_connection *conn, char *tag)
 		cry("Cannot open SSI #include: [%s]: %s", tag, strerror(ERRNO));
 	} else {
 		set_close_on_exec(fileno(fp));
-		send_opened_file_stream(conn, fp, ~0);
+		send_opened_file_stream(conn, fp, ~0ULL);
 		(void) fclose(fp);
 	}
 }
@@ -2440,7 +2442,7 @@ do_ssi_exec(struct mg_connection *conn, char *tag)
 	} else if ((fp = popen(cmd, "r")) == NULL) {
 		cry("Cannot SSI #exec: [%s]: %s", cmd, strerror(ERRNO));
 	} else {
-		send_opened_file_stream(conn, fp, ~0);
+		send_opened_file_stream(conn, fp, ~0ULL);
 		(void) pclose(fp);
 	}
 }
@@ -2533,7 +2535,7 @@ analyze_request(struct mg_connection *conn)
 	if ((conn->request_info.query_string = strchr(uri, '?')) != NULL)
 		* (char *) conn->request_info.query_string++ = '\0';
 
-	url_decode(uri, strlen(uri), uri, strlen(uri) + 1);
+	url_decode(uri, (int) strlen(uri), uri, (int) strlen(uri) + 1);
 	remove_double_dots(uri);
 	make_path(conn->ctx, uri, path, sizeof(path));
 
@@ -3144,7 +3146,7 @@ process_new_connection(struct mg_connection *conn)
 	nread = 0;
 	do {
 		/* If next request is not pipelined, read it in */
-		if ((request_len = get_request_len(buf, nread)) == 0)
+		if ((request_len = get_request_len(buf, (size_t) nread)) == 0)
 			request_len = read_request(-1, conn->sock, conn->ssl,
 			    buf, sizeof(buf), &nread);
 		assert(nread >= request_len);
