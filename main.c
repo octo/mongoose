@@ -34,6 +34,7 @@
 #include <windows.h>
 #define DIRSEP			'\\'
 #define	snprintf		_snprintf
+#define	strdup(x)		_strdup(x)
 #define	pause()			Sleep(INT_MAX)
 #else
 #include <sys/wait.h>
