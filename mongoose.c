@@ -76,6 +76,10 @@
 #define	pclose(x)		_pclose(x)
 #define	access(x, y)		_access(x, y)
 #define	strtoull(x, y, z)	_strtoui64(x, y, z)
+#define	write(x, y, z)		_write(x, y, (unsigned) z)
+#define	read(x, y, z)		_read(x, y, (unsigned) z)
+#define	close(x)		_close(x)
+#define	open(x, y, z)		_open(x, y, z)
 typedef HANDLE pthread_mutex_t;
 
 #ifdef __LCC__
@@ -83,7 +87,7 @@ typedef HANDLE pthread_mutex_t;
 #elif _MSC_VER		/* MinGW already has these */
 typedef unsigned int		uint32_t;
 typedef unsigned short		uint16_t;
-typedef __int64			uint64_t;
+typedef unsigned __int64	uint64_t;
 #define S_ISDIR(x)		((x) & _S_IFDIR)
 #endif /* __LCC__ */
 
@@ -122,6 +126,7 @@ typedef struct DIR {
 #define	mg_mkdir(x, y)		mkdir(x, y)
 #define	ERRNO			errno
 #define	INVALID_SOCKET		(-1)
+typedef SOCKET int;
 
 #endif /* End of Windows and UNIX specific includes */
 
@@ -186,7 +191,7 @@ struct ssl_func {
 #define	SSL_write(x,y,z) \
 	(* (int (*)(SSL *, const void *,int)) FUNC(4))((x), (y), (z))
 #define	SSL_get_error(x,y)(* (int (*)(SSL *, int)) FUNC(5))((x), (y))
-#define	SSL_set_fd(x,y)	(* (int (*)(SSL *, int)) FUNC(6))((x), (y))
+#define	SSL_set_fd(x,y)	(* (int (*)(SSL *, SOCKET)) FUNC(6))((x), (y))
 #define	SSL_new(x)	(* (SSL * (*)(SSL_CTX *)) FUNC(7))(x)
 #define	SSL_CTX_new(x)	(* (SSL_CTX * (*)(SSL_METHOD *)) FUNC(8))(x)
 #define	SSLv23_server_method()	(* (SSL_METHOD * (*)(void)) FUNC(9))()
@@ -237,7 +242,7 @@ enum mg_option_index {
 };
 
 struct listener {
-	int	sock;		/* Listening socket		*/
+	SOCKET	sock;		/* Listening socket		*/
 	int	is_ssl;		/* Should be SSL-ed		*/
 };
 
@@ -277,7 +282,7 @@ struct mg_connection {
 	struct mg_request_info	request_info;
 	struct mg_context *ctx;		/* Mongoose context we belong to*/
 	void		*ssl;		/* SSL descriptor		*/
-	int		sock;		/* Connected socket		*/
+	SOCKET		sock;		/* Connected socket		*/
 	struct usa	rsa;		/* Remote socket address	*/
 	struct usa	lsa;		/* Local socket address		*/
 	time_t		birth_time;	/* Time connection was accepted	*/
@@ -394,7 +399,7 @@ mg_vsnprintf(char *buf, size_t buflen, const char *fmt, va_list ap)
 		n = 0;
 	} else if (n >= (int) buflen) {
 		cry("truncating vsnprintf buffer");
-		n = buflen - 1;
+		n = (int) buflen - 1;
 	}
 	buf[n] = '\0';
 
@@ -484,7 +489,7 @@ match_extension(const char *path, const char *ext_list)
 	path_len = strlen(path);
 
 	FOR_EACH_WORD_IN_LIST(ext_list, len)
-		if (len < path_len && path[path_len - len - 1] == '.' &&
+		if (len < path_len && path[path_len - (len + 1)] == '.' &&
 		    !mg_strncasecmp(path + path_len - len, ext_list, len))
 			return (TRUE);
 
@@ -676,7 +681,7 @@ static int
 spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		char *envp[], int fd_stdin, int fd_stdout, const char *dir)
 {
-	HANDLE	io[2],me;
+	HANDLE	io[2], me;
 	DWORD	flags;
 	char	*p, *interp, cmdline[FILENAME_MAX], line[FILENAME_MAX];
 	FILE	*fp;
@@ -774,8 +779,8 @@ start_thread(void * (*func)(void *), void *param)
 	pthread_attr_t	attr;
 	int		retval;
 
-	pthread_attr_init(&attr);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	(void) pthread_attr_init(&attr);
+	(void) pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
 	if ((retval = pthread_create(&thread_id, &attr, func, param)) != 0)
 		cry("%s: %s", __func__, strerror(retval));
@@ -859,7 +864,7 @@ mg_unlock(struct mg_context *ctx)
  * descriptor. Return number of bytes written.
  */
 static uint64_t
-push(int fd, int sock, void *ssl, const char *buf, uint64_t len)
+push(int fd, SOCKET sock, void *ssl, const char *buf, uint64_t len)
 {
 	uint64_t	sent, to_be_sent;
 	int		n;
@@ -892,7 +897,7 @@ push(int fd, int sock, void *ssl, const char *buf, uint64_t len)
  * Return number of bytes read.
  */
 static int
-pull(int fd, int sock, void *ssl, char *buf, int len)
+pull(int fd, SOCKET sock, void *ssl, char *buf, int len)
 {
 	int	nread;
 
@@ -1076,10 +1081,11 @@ make_path(struct mg_context *ctx, const char *uri, char *buf, size_t buf_len)
 /*
  * Setup listening socket on given port, return socket
  */
-static int
+static SOCKET
 mg_open_listening_port(int port)
 {
-	int		sock, on = 1;
+	SOCKET		sock;
+	int		on = 1;
 	struct usa	sa;
 
 	sa.len				= sizeof(sa.u.sin);
@@ -1967,13 +1973,13 @@ parse_http_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
 }
 
 static int
-read_request(int fd, int sock, void *ssl, char *buf, int buf_size, int *nread)
+read_request(int fd, SOCKET sock, void *ssl, char *buf, int bufsiz, int *nread)
 {
 	int	n, request_len;
 
 	request_len = 0;
-	while (*nread < buf_size && request_len == 0) {
-		n = pull(fd, sock, ssl, buf + *nread, buf_size - *nread);
+	while (*nread < bufsiz && request_len == 0) {
+		n = pull(fd, sock, ssl, buf + *nread, bufsiz - *nread);
 		if (n <= 0) {
 			break;
 		} else {
@@ -2616,7 +2622,8 @@ close_all_listening_sockets(struct mg_context *ctx)
 static bool_t
 set_ports_option(struct mg_context *ctx, const char *p)
 {
-	int	sock, len, is_ssl, port;
+	SOCKET	sock;
+	int	len, is_ssl, port;
 
 	close_all_listening_sockets(ctx);
 
@@ -2741,11 +2748,11 @@ check_acl(struct mg_context *ctx, const struct usa *usa)
 }
 
 static void
-add_to_set(int fd, fd_set *set, int *max_fd)
+add_to_set(SOCKET fd, fd_set *set, int *max_fd)
 {
 	FD_SET(fd, set);
 	if (fd > *max_fd)
-		*max_fd = fd;
+		*max_fd = (int) fd;
 }
 
 /*
@@ -3035,7 +3042,7 @@ int
 mg_set_option(struct mg_context *ctx, const char *opt, const char *val)
 {
 	const struct mg_option	*option;
-	int				i, ctx_index, retval;
+	int			i, ctx_index, retval;
 
 	mg_lock(ctx);
 	if (opt != NULL && (option = find_opt(opt)) != NULL) {
@@ -3097,7 +3104,7 @@ close_connection(struct mg_connection *conn)
 	reset_per_request_attributes(conn);
 	if (conn->ssl)
 		SSL_free(conn->ssl);
-	if (conn->sock != -1)
+	if (conn->sock != INVALID_SOCKET)
 		(void) closesocket(conn->sock);
 	free(conn);
 }
