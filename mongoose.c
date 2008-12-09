@@ -862,7 +862,6 @@ static uint64_t
 push(int fd, int sock, void *ssl, const char *buf, uint64_t len)
 {
 	uint64_t	sent, to_be_sent;
-	size_t		to_write;
 	int		n;
 
 	sent = 0;
