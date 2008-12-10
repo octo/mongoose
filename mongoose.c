@@ -126,7 +126,7 @@ typedef struct DIR {
 #define	mg_mkdir(x, y)		mkdir(x, y)
 #define	ERRNO			errno
 #define	INVALID_SOCKET		(-1)
-typedef SOCKET int;
+typedef int SOCKET;
 
 #endif /* End of Windows and UNIX specific includes */
 
