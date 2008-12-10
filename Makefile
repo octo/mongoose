@@ -1,6 +1,6 @@
 PROG=	mongoose
 SRCS=	main.c mongoose.c
-COPT=	-W -Wall -std=c99 -pedantic -Os
+COPT=	-W -Wall -std=c99 -pedantic -Os -s
 
 # Possible flags: (in brackets are rough numbers for 'gcc -O2' on i386)
 # -DHAVE_MD5		- use system md5 library (-2kb)
@@ -45,7 +45,7 @@ test-server:
 	perl test/test.pl
 
 release: clean
-	F=mongoose-`perl -lne '/define\s+MONGOOSE_VERSION\s+"(\S+)"/ and print $$1' mongoose.c`.tgz ; cd .. && tar --exclude \*.svn --exclude \*.swp --exclude \*.nfs\* -czf x mongoose && mv x mongoose/$$F
+	F=mongoose-`perl -lne '/define\s+MONGOOSE_VERSION\s+"(\S+)"/ and print $$1' mongoose.c`.tgz ; cd .. && tar --exclude \*.svn --exclude \*.swp --exclude \*.nfs\* --exclude win32_installer -czf x mongoose && mv x mongoose/$$F
 
 clean:
 	rm -rf *.o *.core $(PROG) *.obj $(PROG).1.txt *.dSYM *.tgz
