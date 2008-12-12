@@ -61,9 +61,9 @@ struct mg_request_info {
  * Array of those is returned by mg_get_option_list().
  */
 struct mg_option {
-	const char	*name;
-	const char	*description;
-	const char	*default_value;
+	char	*name;
+	char	*description;
+	char	*default_value;
 };
 
 /*

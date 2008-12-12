@@ -2923,8 +2923,8 @@ admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
 		void *user_data)
 {
 	const struct mg_option	*list;
-	const char			*option_name, *option_value;
-	int				i;
+	const char		*option_name, *option_value;
+	int			i;
 
 	user_data = NULL; /* Unused */
 
