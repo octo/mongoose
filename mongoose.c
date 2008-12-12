@@ -2080,9 +2080,9 @@ append_chunk(struct mg_request_info *ri, int fd, const char *buf, int len)
 
 	if (fd == -1) {
 		/* TODO: check for NULL here */
-		ri->post_data = realloc((char *) ri->post_data,
+		ri->post_data = realloc(ri->post_data,
 		    ri->post_data_len + len);
-		(void) memcpy((char *) ri->post_data + ri->post_data_len,
+		(void) memcpy(ri->post_data + ri->post_data_len,
 		    buf, len);
 		ri->post_data_len += len;
 	} else if (push(fd, -1, NULL, buf, (uint64_t) len) != (uint64_t) len) {
@@ -2128,8 +2128,7 @@ handle_request_body(struct mg_connection *conn, int fd)
 				tmp = ri->post_data;
 				/* +1 in case if already_read == 0 */
 				ri->post_data = malloc(already_read + 1);
-				(void) memcpy((char *) ri->post_data,
-				    tmp, already_read);
+				(void) memcpy(ri->post_data, tmp, already_read);
 			} else {
 				(void) push(fd, -1, NULL,
 				    ri->post_data, (uint64_t) already_read);
@@ -2312,6 +2311,9 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	    !handle_request_body(conn, fd_stdin[1])) {
 		goto done;
 	}
+
+	/* spawn_process() must close those */
+	fd_stdin[0] = fd_stdout[1] = -1;
 
 	/*
 	 * Now read CGI reply into a buffer. We need to set correct
@@ -2548,12 +2550,12 @@ static void
 analyze_request(struct mg_connection *conn)
 {
 	struct mg_request_info *ri = &conn->request_info;
-	char			path[FILENAME_MAX], *uri = (char *) ri->uri;
+	char			path[FILENAME_MAX], *uri = ri->uri;
 	struct stat		st;
 	const struct callback	*cb;
 
 	if ((conn->request_info.query_string = strchr(uri, '?')) != NULL)
-		* (char *) conn->request_info.query_string++ = '\0';
+		* conn->request_info.query_string++ = '\0';
 
 	url_decode(uri, (int) strlen(uri), uri, (int) strlen(uri) + 1);
 	remove_double_dots(uri);
@@ -3108,7 +3110,7 @@ static void
 reset_per_request_attributes(struct mg_connection *conn)
 {
 	if (conn->request_info.remote_user != NULL)
-		free((char *) conn->request_info.remote_user);
+		free(conn->request_info.remote_user);
 	if (conn->free_post_data && conn->request_info.post_data != NULL)
 		free((void *)conn->request_info.post_data);
 }

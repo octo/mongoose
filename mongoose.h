@@ -37,22 +37,22 @@ struct mg_connection;	/* Handle for the individual connection	*/
  * It is passed to the user-specified callback function as a parameter.
  */
 struct mg_request_info {
-	const char	*request_method;	/* "GET", "POST", etc	*/
-	const char	*uri;			/* Normalized URI	*/
-	const char	*query_string;		/* \0 - terminated	*/
-	const char	*post_data;		/* POST data buffer	*/
-	const char	*remote_user;		/* Authenticated user	*/
-	unsigned long	remote_ip;		/* Client's IP address	*/
-	int		remote_port;		/* Client's port	*/
-	int		post_data_len;		/* POST buffer length	*/
-	int		http_version_major;
-	int		http_version_minor;
-	int		status_code;		/* HTTP status code	*/
-	int		num_headers;		/* Number of headers	*/
+	char	*request_method;	/* "GET", "POST", etc	*/
+	char	*uri;			/* Normalized URI	*/
+	char	*query_string;		/* \0 - terminated	*/
+	char	*post_data;		/* POST data buffer	*/
+	char	*remote_user;		/* Authenticated user	*/
+	long	remote_ip;		/* Client's IP address	*/
+	int	remote_port;		/* Client's port	*/
+	int	post_data_len;		/* POST buffer length	*/
+	int	http_version_major;
+	int	http_version_minor;
+	int	status_code;		/* HTTP status code	*/
+	int	num_headers;		/* Number of headers	*/
 #define	MAX_HTTP_HEADERS	64
 	struct mg_header {
-		const char	*name;		/* HTTP header name	*/
-		const char	*value;		/* HTTP header value	*/
+		char	*name;		/* HTTP header name	*/
+		char	*value;		/* HTTP header value	*/
 	} http_headers[MAX_HTTP_HEADERS];
 };
 
