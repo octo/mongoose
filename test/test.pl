@@ -31,6 +31,10 @@ END {
 	exit $exit_code;
 }
 
+sub on_windows {
+	return $^O =~ /win/i;
+}
+
 sub fail {
 	print "FAILED: @_\n";
 	$exit_code = 1;
@@ -82,9 +86,18 @@ sub o {
 
 # Spawn a server listening on specified port
 sub spawn {
-	unless ($pid = fork()) {
-		exec @_;
-		die "cannot exec: $!\n";
+	my ($cmdline) = @_;
+	if (on_windows()) {
+		my @args = split /\s+/, $cmdline;
+		my $executable = $args[0];
+		$executable .= '.exe';
+		Win32::Spawn($executable, $cmdline, $pid);
+		die "Cannot spawn @_: $!" unless $pid;
+	} else {
+		unless ($pid = fork()) {
+			exec $cmdline;
+			die "cannot exec [$cmdline]: $!\n";
+		}
 	}
 	sleep 1;
 }
@@ -133,7 +146,7 @@ kill_spawned_child();
 # Spawn the server on port $port
 my $cmd = "$exe -ports $port -access_log access.log -error_log debug.log ".
 		"-root test -aliases $alias -auth_PUT test/passfile";
-$cmd .= ' -cgi_interp perl' if $^O =~ /win/i;
+$cmd .= ' -cgi_interp perl' if on_windows();
 spawn($cmd);
 
 # Try to overflow: Send very long request
