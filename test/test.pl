@@ -5,18 +5,19 @@
 use IO::Socket;
 use strict;
 use warnings;
-use diagnostics;
+#use diagnostics;
 
 my $port = 23456;
 my $pid = undef;
 my $num_requests;
 my $root = 'test';
+my $dir_separator = $^O =~ /win/i ? '\\' : '/';
 my $test_dir_uri = "test_dir";
-my $test_dir = "$root/$test_dir_uri";
+my $test_dir = $root . $dir_separator. $test_dir_uri;
 my $alias = "/aliased=/etc/,/ta=$test_dir";
 my $config = 'mongoose.conf';
-my $exe = './mongoose';
-my $embed_exe = './embed';
+my $exe = '.' . $dir_separator . 'mongoose';
+my $embed_exe = '.' . $dir_separator . 'embed';
 my $exit_code = 0;
 
 my @files_to_delete = ('debug.log', 'access.log', $config, "$root/put.txt",
@@ -74,7 +75,8 @@ sub o {
 	if ($reply =~ /$expected_reply/s) {
 		print "OK\n";
 	} else {
-		fail("Expected: [$expected_reply], got: [$reply]");
+		fail("Requested: [$request]\n".
+			"Expected: [$expected_reply], got: [$reply]");
 	}
 }
 
@@ -95,7 +97,10 @@ sub read_file {
 }
 
 sub kill_spawned_child {
-	kill(9, $pid) && waitpid($pid, 0) if defined($pid);
+	if (defined($pid)) {
+		kill(9, $pid);
+		waitpid($pid, 0);
+	}
 }
 
 ####################################################### ENTRY POINT
@@ -126,9 +131,10 @@ unlink $config;
 kill_spawned_child();
 
 # Spawn the server on port $port
-spawn("$exe -ports $port -access_log access.log -error_log debug.log ".
-		"-root test ".
-		"-aliases $alias -auth_PUT test/passfile");
+my $cmd = "$exe -ports $port -access_log access.log -error_log debug.log ".
+		"-root test -aliases $alias -auth_PUT test/passfile";
+$cmd .= ' -cgi_interp perl' if $^O =~ /win/i;
+spawn($cmd);
 
 # Try to overflow: Send very long request
 req('POST ' . '/..' x 100 . 'ABCD' x 3000 . "\n\n", 0); # don't log this one
@@ -261,7 +267,7 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 
 sub do_embedded_test {
 	my $cmd = "cc -o $embed_exe $root/embed.c mongoose.c -I. ".
-			"-DNO_SSL -lpthread -DPORT=\\\"$port\\\"";
+			"-DNO_SSL -lpthread -DLISTENING_PORT=\\\"$port\\\"";
 	print $cmd, "\n";
 	system($cmd) == 0 or fail("Cannot compile embedded unit test");
 
