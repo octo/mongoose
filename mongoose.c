@@ -677,18 +677,18 @@ start_thread(void * (*func)(void *), void *param)
 	return (_beginthread((void (__cdecl *)( void *))func, 0, param) == 0);
 }
 
-static int
+static bool_t
 spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		char *envp[], int fd_stdin, int fd_stdout, const char *dir)
 {
-	HANDLE	io[2], me;
+	HANDLE	me;
 	DWORD	flags;
 	char	*p, *interp, cmdline[FILENAME_MAX], line[FILENAME_MAX];
 	FILE	*fp;
+	bool_t	retval;
 	STARTUPINFOA		si;
 	PROCESS_INFORMATION	pi;
 
-	me = GetCurrentProcess();
 	flags = DUPLICATE_CLOSE_SOURCE | DUPLICATE_SAME_ACCESS;
 
 	(void) memset(&si, 0, sizeof(si));
@@ -698,8 +698,12 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	si.cb		= sizeof(si);
 	si.dwFlags	= STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
 	si.wShowWindow	= SW_HIDE;
-	si.hStdInput	= (HANDLE) _get_osfhandle(fd_stdin);
-	si.hStdOutput	= (HANDLE) _get_osfhandle(fd_stdout);
+
+	me = GetCurrentProcess();
+	DuplicateHandle(me, (HANDLE) _get_osfhandle(fd_stdin), me,
+	    &si.hStdInput, 0, TRUE, flags);
+	DuplicateHandle(me, (HANDLE) _get_osfhandle(fd_stdout), me,
+	    &si.hStdOutput, 0, TRUE, flags);
 
 	/* If CGI file is a script, try to read the interpreter line */
 	interp = conn->ctx->options[OPT_CGI_INTERPRETER];
@@ -731,17 +735,22 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	 * Spawn reader & writer threads before we create CGI process.
 	 * Otherwise CGI process may die too quickly, loosing the data
 	 */
+	cry("cmdline: [%s]", cmdline);
 
 	if (CreateProcessA(NULL, cmdline, NULL, NULL, TRUE,
 	    CREATE_NEW_PROCESS_GROUP, envblk, line, &si, &pi) == 0) {
 		cry("%s: CreateProcess(%s): %d", __func__, cmdline, ERRNO);
-		return (-1);
+		retval = FALSE;
 	} else {
-		CloseHandle(pi.hThread);
-		CloseHandle(pi.hProcess);
+		retval = TRUE;
 	}
 
-	return (0);
+	close(fd_stdin);
+	close(fd_stdout);
+	CloseHandle(pi.hThread);
+	CloseHandle(pi.hProcess);
+
+	return (retval);
 }
 
 static int
@@ -2290,10 +2299,16 @@ send_cgi(struct mg_connection *conn, const char *prog)
 		send_error(conn, 500, http_500_error,
 		    "Cannot create CGI pipe: %s", strerror(ERRNO));
 		goto done;
-	} else if (!spawn_process(conn, p, blk.buf, blk.vars,
+	}
+
+	if (!spawn_process(conn, p, blk.buf, blk.vars,
 	    fd_stdin[0], fd_stdout[1], dir)) {
 		goto done;
-	} else if (!strcmp(conn->request_info.request_method, "POST") &&
+	}
+	/* spawn_process() must close those! */
+	fd_stdin[0] = fd_stdout[1] = -1;
+
+	if (!strcmp(conn->request_info.request_method, "POST") &&
 	    !handle_request_body(conn, fd_stdin[1])) {
 		goto done;
 	}
