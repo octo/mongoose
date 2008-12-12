@@ -28,6 +28,10 @@
 #include <stdio.h>
 #include "mongoose.h"
 
+#if !defined(LISTENING_PORT)
+#define LISTENING_PORT	23456
+#endif /* !LISTENING_PORT */
+
 static struct mg_context *ctx;
 static const char *standard_reply =	"HTTP/1.1 200 OK\r\n"
 					"Content-Type: text/plain\r\n"
@@ -116,7 +120,7 @@ int main(void)
 	int	user_data = 1234;
 
 	ctx = mg_start();
-	mg_set_option(ctx, "ports", PORT);
+	mg_set_option(ctx, "ports", LISTENING_PORT);
 
 	mg_bind_to_uri(ctx, "/test_get_header", &test_get_header, NULL);
 	mg_bind_to_uri(ctx, "/test_get_var", &test_get_var, NULL);
