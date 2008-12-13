@@ -7,11 +7,13 @@ use strict;
 use warnings;
 #use diagnostics;
 
+sub on_windows { $^O =~ /^win/i; }
+
 my $port = 23456;
 my $pid = undef;
 my $num_requests;
 my $root = 'test';
-my $dir_separator = $^O =~ /win/i ? '\\' : '/';
+my $dir_separator = on_windows() ? '\\' : '/';
 my $test_dir_uri = "test_dir";
 my $test_dir = $root . $dir_separator. $test_dir_uri;
 my $alias = "/aliased=/etc/,/ta=$test_dir";
@@ -29,10 +31,6 @@ END {
 	rmdir $test_dir;
 	kill_spawned_child();
 	exit $exit_code;
-}
-
-sub on_windows {
-	return $^O =~ /win/i;
 }
 
 sub fail {
