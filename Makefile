@@ -32,7 +32,7 @@ rtems:
 #    (or Itanium/amd64 command promt to build x64 version)
 # 4. In the command prompt, go to mongoose directory and do "nmake windows"
 windows:
-	cl /MT /TC /nologo /DNDEBUG /Os /W2 /D_CRT_SECURE_NO_WARNINGS \
+	cl /MT /TC /nologo /DNDEBUG /Os /W4 /D_CRT_SECURE_NO_WARNINGS \
 		$(SRCS) /link /out:$(PROG).exe \
 		ws2_32.lib user32.lib advapi32.lib shell32.lib
 

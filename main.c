@@ -105,7 +105,7 @@ mg_edit_passwords(const char *fname, const char *domain,
 	(void) snprintf(tmp, sizeof(tmp), "%s.tmp", fname);
 
 	/* Create the file if does not exist */
-	if ((fp = fopen(fname, "a+")))
+	if ((fp = fopen(fname, "a+")) != NULL)
 		(void) fclose(fp);
 
 	/* Open the given file and temporary file */
