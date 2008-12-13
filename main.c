@@ -269,10 +269,12 @@ ControlHandler(DWORD code)
 }
 
 static void WINAPI
-ServiceMain(int argc, char *argv[]) 
+ServiceMain(void) 
 {
-	char path[MAX_PATH], *p, *av[] = {"mongoose_service", path, NULL};
+	char path[MAX_PATH], *p, *av[] = {"mongoose_service", NULL, NULL};
 	struct mg_context *ctx;
+
+	av[1] = path;
 
 	ss.dwServiceType      = SERVICE_WIN32; 
 	ss.dwCurrentState     = SERVICE_RUNNING; 
@@ -298,7 +300,7 @@ ServiceMain(int argc, char *argv[])
 	}
 
 	ss.dwCurrentState  = SERVICE_STOPPED; 
-	ss.dwWin32ExitCode = -1; 
+	ss.dwWin32ExitCode = (DWORD) -1; 
 	SetServiceStatus(hStatus, &ss); 
 }
 
