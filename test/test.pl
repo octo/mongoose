@@ -7,7 +7,7 @@ use strict;
 use warnings;
 #use diagnostics;
 
-sub on_windows { $^O =~ /^win/i; }
+sub on_windows { $^O =~ /win32/i; }
 
 my $port = 23456;
 my $pid = undef;
@@ -51,8 +51,8 @@ sub req {
 		PeerAddr=>'127.0.0.1', PeerPort=>$port);
 	fail("Cannot connect: $!") unless $sock;
 	$sock->autoflush(1);
-	foreach (split //, $request) {
-		print $sock $_;
+	foreach my $byte (split //, $request) {
+		print $sock $byte;
 		select undef, undef, undef, .001 if length($request) < 256;
 	}
 	my @lines = <$sock>;
