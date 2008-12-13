@@ -2322,6 +2322,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	 */
 	fd_stdin[0] = fd_stdout[1] = -1;
 
+	/* Send POST data to the CGI process if needed */
 	if (!strcmp(conn->request_info.request_method, "POST") &&
 	    !handle_request_body(conn, fd_stdin[1])) {
 		goto done;
@@ -2330,7 +2331,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	/*
 	 * Now read CGI reply into a buffer. We need to set correct
 	 * status code, thus we need to see all HTTP headers first.
-	 * Do not send anything back to client, until we see all
+	 * Do not send anything back to client, until we buffer in all
 	 * HTTP headers.
 	 */
 	data_len = 0;
@@ -3134,8 +3135,15 @@ close_connection(struct mg_connection *conn)
 	reset_per_request_attributes(conn);
 	if (conn->ssl)
 		SSL_free(conn->ssl);
-	if (conn->sock != INVALID_SOCKET)
+	if (conn->sock != INVALID_SOCKET) {
+		/*
+		 * If shutdown() call is absent, Windows discards the content
+		 * of the socket buffer. So if the other side may receive
+		 * incomplete data.
+		 */
+		(void) shutdown(conn->sock, 2);
 		(void) closesocket(conn->sock);
+	}
 	free(conn);
 }
 
