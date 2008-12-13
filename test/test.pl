@@ -72,7 +72,7 @@ sub req {
 # Send the request. Compare with the expected reply. Fail if no match
 sub o {
 	my ($request, $expected_reply, $message, $num_logs) = @_;
-	print "$message ... ";
+	print "==> Testing $message ... ";
 	my $reply = req($request, $num_logs);
 	if ($reply =~ /$expected_reply/s) {
 		print "OK\n";
@@ -206,13 +206,12 @@ my $f1 = req("GET /$binary_file HTTP/1.0\r\n\n");
 while ($f1 =~ /^.*\r\n/) { $f1 =~ s/^.*\r\n// }
 $f1 eq $f2 or fail("Integrity check for downloaded binary file");
 
-my $out = req("GET /hello.txt HTTP/1.1\nConnection: close\n".
-		"Range: bytes=3-5\r\n\r\n");
-$out =~ /206 Partial Content/ or fail("Partial Content not seen ($out)");
-$out =~ /Content-Length: 3/ or fail("Bad Range length ($out)");
-$out =~ /Content-Range: bytes 3-5/ or fail("Bad Range ($out)");
-$out =~ /\nple$/s or fail("Bad Range content ($out)");
-print "Range support ... OK\n";
+my $range_request = "GET /hello.txt HTTP/1.1\nConnection: close\n".
+		"Range: bytes=3-5\r\n\r\n";
+o($range_request, '206 Partial Content', 'Range: 206 status code');
+o($range_request, 'Content-Length: 3\s', 'Range: Content-Length');
+o($range_request, 'Content-Range: bytes 3-5', 'Range: Content-Range');
+o($range_request, '\nple$', 'Range: body content');
 
 unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 	o("GET /env.cgi HTTP/1.0\n\r\n", 'HTTP/1.1 200 OK', 'GET CGI file');
@@ -314,4 +313,4 @@ sub do_embedded_test {
 	kill_spawned_child();
 }
 
-print "Congratulations. Test passed.\n";
+print "SUCCESS! All tests are passed.\n";
