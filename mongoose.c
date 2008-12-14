@@ -67,9 +67,10 @@
 #define	O_NONBLOCK		0
 #define	EWOULDBLOCK		WSAEWOULDBLOCK
 #define	dlopen(x,y)		LoadLibraryW(x)
-#define	dlsym(x,y)		(void *) GetProcAddress(x,y)
+#define	dlsym(x,y)		GetProcAddress(x,y)
 #define	_POSIX_
 #define	R_OK			04 /* for _access() */
+#define	SD_SEND			1
 #define	snprintf		_snprintf
 #define	vsnprintf		_vsnprintf
 #define	popen(x, y)		_popen(x, y)
@@ -78,8 +79,10 @@
 #define	strtoull(x, y, z)	_strtoui64(x, y, z)
 #define	write(x, y, z)		_write(x, y, (unsigned) z)
 #define	read(x, y, z)		_read(x, y, (unsigned) z)
-#define	close(x)		_close(x)
 #define	open(x, y, z)		_open(x, y, z)
+#define	lseek(x, y, z)		_lseek(x, y, z)
+#define	close(x)		_close(x)
+#define	fileno(x)		_fileno(x)
 typedef HANDLE pthread_mutex_t;
 
 #ifdef __LCC__
@@ -124,6 +127,9 @@ typedef struct DIR {
 #define	O_BINARY		0
 #define	closesocket(a)		close(a)
 #define	mg_mkdir(x, y)		mkdir(x, y)
+#define	mg_open(x, y)		open(x, y)
+#define	mg_remove(x)		remove(x)
+#define	mg_stat(x, y)		stat(x, y)
 #define	ERRNO			errno
 #define	INVALID_SOCKET		(-1)
 typedef int SOCKET;
@@ -555,14 +561,16 @@ send_error(struct mg_connection *conn, int status, const char *reason,
 		    "Connection: close\r\n"
 		    "\r\n", status, reason);
 
-		conn->num_bytes_sent += mg_printf(conn,
-		    "Error %d: %s\n", status, reason);
+		/* Errors 1xx, 204 and 304 MUST NOT send a body */
+		if (status > 199 && status != 204 && status != 304) {
+			conn->num_bytes_sent = mg_printf(conn,
+			    "Error %d: %s\n", status, reason);
 
-		va_start(ap, fmt);
-		len = mg_vsnprintf(buf, sizeof(buf), fmt, ap);
-		va_end(ap);
-
-		conn->num_bytes_sent += mg_write(conn, buf, len);
+			va_start(ap, fmt);
+			len = mg_vsnprintf(buf, sizeof(buf), fmt, ap);
+			va_end(ap);
+			conn->num_bytes_sent += mg_write(conn, buf, len);
+		}
 	}
 }
 
@@ -590,7 +598,6 @@ pthread_mutex_unlock(pthread_mutex_t *mutex) {
 	return (ReleaseMutex(*mutex) == 0 ? -1 : 0);
 }
 
-
 static void
 fix_directory_separators(char *path)
 {
@@ -602,6 +609,65 @@ fix_directory_separators(char *path)
 				(void) memmove(path + 1,
 				    path + 2, strlen(path + 2) + 1);
 	}
+}
+
+static void
+to_unicode(const char *path, wchar_t *wbuf, size_t wbuf_len)
+{
+	char	buf[FILENAME_MAX], *p;
+
+	mg_strlcpy(buf, path, sizeof(buf));
+	fix_directory_separators(buf);
+
+	/* Point p to the end of the file name */
+	p = buf + strlen(buf) - 1;
+
+	/* Trim trailing backslash character */
+	while (p > buf && *p == '\\' && p[-1] != ':')
+		*p-- = '\0';
+
+	/*
+	 * Protect from CGI code disclosure.
+	 * This is very nasty hole. Windows happily opens files with
+	 * some garbage in the end of file name. So fopen("a.cgi    ", "r")
+	 * actually opens "a.cgi", and does not return an error!
+	 */
+	if (*p == 0x20 || *p == 0x2e || *p == 0x2b || (*p & ~0x7f)) {
+		cry("Rejecting suspicious path: [%s]", buf);
+		buf[0] = '\0';
+	}
+
+	MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, wbuf_len);
+}
+
+static int
+mg_open(const char *path, int flags, int mode)
+{
+	wchar_t	wbuf[FILENAME_MAX];
+
+	to_unicode(path, wbuf, sizeof(wbuf));
+
+	return (_wopen(wbuf, flags, mode));
+}
+
+static int
+mg_stat(const char *path, struct stat *stp)
+{
+	wchar_t	wbuf[FILENAME_MAX];
+
+	to_unicode(path, wbuf, sizeof(wbuf));
+
+	return (_wstat(wbuf, (struct _stat *) stp));
+}
+
+static int
+mg_remove(const char *path)
+{
+	wchar_t	wbuf[FILENAME_MAX];
+
+	to_unicode(path, wbuf, sizeof(wbuf));
+
+	return (_wremove(wbuf));
 }
 
 static DIR *
@@ -616,8 +682,8 @@ opendir(const char *name)
 	} else if ((dir = malloc(sizeof(*dir))) == NULL) {
 		errno = ENOMEM;
 	} else {
-		mg_snprintf(path, sizeof(path), "%s\\*", name);
-		MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, sizeof(wpath));
+		mg_snprintf(path, sizeof(path), "%s/*", name);
+		to_unicode(path, wpath, sizeof(wpath));
 		dir->handle = FindFirstFileW(wpath, &dir->info);
 
 		if (dir->handle != INVALID_HANDLE_VALUE) {
@@ -750,6 +816,8 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		retval = TRUE;
 	}
 
+	CloseHandle(si.hStdOutput);
+	CloseHandle(si.hStdInput);
 	CloseHandle(pi.hThread);
 	CloseHandle(pi.hProcess);
 
@@ -1866,18 +1934,18 @@ send_directory(struct mg_connection *conn, const char *path)
  * Send len bytes from the opened file to the client.
  */
 static void
-send_opened_file_stream(struct mg_connection *conn, FILE *fp, uint64_t len)
+send_opened_file_stream(struct mg_connection *conn, int fd, uint64_t len)
 {
 	char	buf[BUFSIZ];
-	size_t	n;
+	int	n;
 
 	while (len > 0) {
 		n = sizeof(buf);
 		if ((uint64_t) n > len)
-			n = (size_t) len;
-		if ((n = fread(buf, 1, n, fp)) <= 0)
+			n = (int) len;
+		if ((n = read(fd, buf, n)) <= 0)
 			break;
-		conn->num_bytes_sent += mg_write(conn, buf, (int) n);
+		conn->num_bytes_sent += mg_write(conn, buf, n);
 		len -= n;
 	}
 }
@@ -1889,28 +1957,27 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 	const char	*fmt = "%a, %d %b %Y %H:%M:%S GMT", *msg = "OK";
 	const char	*mime_type, *s;
 	time_t		curtime = time(NULL);
-	FILE		*fp;
 	unsigned long long cl, r1, r2;
-	int		n;
+	int		fd, n;
 
 	mime_type = get_mime_type(path);
 	cl = stp->st_size;
 	conn->request_info.status_code = 200;
 	range[0] = '\0';
 
-	if ((fp = fopen(path, "rb")) == NULL) {
+	if ((fd = mg_open(path, O_RDONLY | O_BINARY, 0644)) == -1) {
 		send_error(conn, 500, http_500_error,
 		    "fopen(%s): %s", path, strerror(ERRNO));
 		return;
 	}
-	set_close_on_exec(fileno(fp));
+	set_close_on_exec(fd);
 
 	/* If Range: header specified, act accordingly */
 	s = mg_get_header(conn, "Range");
 	r1 = r2 = 0;
 	if (s != NULL && (n = sscanf(s,"bytes=%llu-%llu", &r1, &r2)) > 0) {
 		conn->request_info.status_code = 206;
-		(void) fseek(fp, (long) r1, SEEK_SET);
+		(void) lseek(fd, (long) r1, SEEK_SET);
 		cl = n == 2 ? r2 - r1 + 1: cl - r1;
 		(void) mg_snprintf(range, sizeof(range),
 		    "Content-Range: bytes %llu-%llu/%llu\r\n",
@@ -1940,8 +2007,9 @@ send_file(struct mg_connection *conn, const char *path, struct stat *stp)
 	    conn->request_info.status_code, msg, date, lm, etag, mime_type, cl,
 	    conn->keep_alive ? "keep-alive" : "close", range);
 
-	send_opened_file_stream(conn, fp, cl);
-	(void) fclose(fp);
+	if (strcmp(conn->request_info.request_method, "HEAD") != 0)
+		send_opened_file_stream(conn, fd, cl);
+	(void) close(fd);
 }
 
 static void
@@ -2160,6 +2228,11 @@ handle_request_body(struct mg_connection *conn, int fd)
 			}
 			success_code = content_len == 0 ? TRUE : FALSE;
 		}
+
+		/* Each error code path in this function must send an error */
+		if (success_code != TRUE)
+			send_error(conn, 577, http_500_error,
+			   "%s", "Error handling body data");
 	}
 
 	return (success_code);
@@ -2395,7 +2468,7 @@ put_dir(const char *path)
 		buf[len] = '\0';
 
 		/* Try to create intermediate directory */
-		if (stat(buf, &st) == -1 && mg_mkdir(buf, 0755) != 0)
+		if (mg_stat(buf, &st) == -1 && mg_mkdir(buf, 0755) != 0)
 			return (-1);
 
 		/* Is path itself a directory ? */
@@ -2412,7 +2485,7 @@ put_file(struct mg_connection *conn, const char *path)
 	struct stat	st;
 	int		rc, fd;
 
-	conn->request_info.status_code = stat(path, &st) == 0 ? 200 : 201;
+	conn->request_info.status_code = mg_stat(path, &st) == 0 ? 200 : 201;
 
 	if (mg_get_header(conn, "Range")) {
 		send_error(conn, 501, "Not Implemented",
@@ -2422,7 +2495,8 @@ put_file(struct mg_connection *conn, const char *path)
 	} else if (rc == -1) {
 		send_error(conn, 500, http_500_error,
 		    "put_dir(%s): %s", path, strerror(ERRNO));
-	} else if ((fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644)) == -1) {
+	} else if ((fd = mg_open(path,
+	    O_WRONLY | O_BINARY | O_CREAT | O_TRUNC, 0644)) == -1) {
 		send_error(conn, 500, http_500_error,
 		    "open(%s): %s", path, strerror(ERRNO));
 	} else {
@@ -2436,33 +2510,45 @@ put_file(struct mg_connection *conn, const char *path)
 
 #if !defined(NO_SSI)
 static void
-do_ssi_include(struct mg_connection *conn, char *tag)
+do_ssi_include(struct mg_connection *conn, const char *ssi, char *tag)
 {
-	char	file_name[BUFSIZ], path[FILENAME_MAX];
+	char	file_name[BUFSIZ], path[FILENAME_MAX], *p;
 	FILE	*fp;
 
-	if (sscanf(tag, " file=\"%[^\"]\"", file_name) == 1) {
-		/* File name is relative to the current URI */
-		(void) mg_snprintf(path, sizeof(path), "%s%c%s");
-	} else if (sscanf(tag, " virtual=\"%[^\"]\"", file_name) == 1) {
+	/*
+	 * sscanf() is safe here, since send_ssi_file() also uses buffer
+	 * of size BUFSIZ to get the tag. So strlen(tag) is always < BUFSIZ.
+	 */
+	if (sscanf(tag, " virtual=\"%[^\"]\"", file_name) == 1) {
 		/* File name is relative to the webserver root */
 		mg_lock(conn->ctx);
 		(void) mg_snprintf(path, sizeof(path), "%s%c%s",
 		    conn->ctx->options[OPT_ROOT], DIRSEP, file_name);
 		mg_unlock(conn->ctx);
-	} else if (sscanf(tag, " \"%[^\"]\"", file_name) == 1) {
-		/* File name is relative to the webserver working directory */
+	} else if (sscanf(tag, " file=\"%[^\"]\"", file_name) == 1) {
+		/*
+		 * File name is relative to the webserver working directory
+		 * or it is absolute system path
+		 */
 		(void) mg_snprintf(path, sizeof(path), "%s", file_name);
+	} else if (sscanf(tag, " \"%[^\"]\"", file_name) == 1) {
+		/* File name is relative to the currect document */
+		(void) mg_snprintf(path, sizeof(path), "%s", ssi);
+		if ((p = strrchr(path, DIRSEP)) != NULL)
+			p[1] = '\0'; 
+		(void) mg_snprintf(path + strlen(path),
+		    sizeof(path) - strlen(path), "%s", file_name);
 	} else {
 		cry("Bad SSI #include: [%s]", tag);
 		return;
 	}
 
 	if ((fp = fopen(path, "rb")) == NULL) {
-		cry("Cannot open SSI #include: [%s]: %s", tag, strerror(ERRNO));
+		cry("Cannot open SSI #include: [%s]: fopen(%s): %s",
+		    tag, path, strerror(ERRNO));
 	} else {
 		set_close_on_exec(fileno(fp));
-		send_opened_file_stream(conn, fp, ~0ULL);
+		send_opened_file_stream(conn, fileno(fp), ~0ULL);
 		(void) fclose(fp);
 	}
 }
@@ -2478,7 +2564,7 @@ do_ssi_exec(struct mg_connection *conn, char *tag)
 	} else if ((fp = popen(cmd, "r")) == NULL) {
 		cry("Cannot SSI #exec: [%s]: %s", cmd, strerror(ERRNO));
 	} else {
-		send_opened_file_stream(conn, fp, ~0ULL);
+		send_opened_file_stream(conn, fileno(fp), ~0ULL);
 		(void) pclose(fp);
 	}
 }
@@ -2503,7 +2589,7 @@ send_ssi_file(struct mg_connection *conn, const char *path, FILE *fp)
 				(void) mg_write(conn, buf, len);
 			} else {
 				if (!memcmp(buf + 5, "include", 7)) {
-					do_ssi_include(conn, buf + 12);
+					do_ssi_include(conn, path, buf + 12);
 				} else if (!memcmp(buf + 5, "exec", 4)) {
 					do_ssi_exec(conn, buf + 9);
 				} else {
@@ -2602,7 +2688,7 @@ analyze_request(struct mg_connection *conn)
 			    "remove(%s): %s", path, strerror(ERRNO));
 	} else
 #endif /* NO_AUTH */
-	if (stat(path, &st) != 0) {
+	if (mg_stat(path, &st) != 0) {
 		send_error(conn, 404, "Not Found", "%s", "");
 	} else if (S_ISDIR(st.st_mode) && uri[strlen(uri) - 1] != '/') {
 		(void) mg_printf(conn,
@@ -2859,17 +2945,25 @@ set_ssl_option(struct mg_context *ctx, const char *pem)
 		return (FALSE);
 	}
 
-	for (fp = ssl_sw; fp->name != NULL; fp++)
-		if ((u.p = dlsym(lib, fp->name)) == NULL) {
+	for (fp = ssl_sw; fp->name != NULL; fp++) {
+#ifdef _WIN32
+		/* GetProcAddress() returns pointer to function */
+		u.fp = (void (*)(void)) dlsym(lib, fp->name);
+#else
+		/*
+		 * dlsym() on UNIX returns void *.
+		 * ISO C forbids casts of data pointers to function
+		 * pointers. We need to use a union to make a cast.
+		 */
+		u.p = dlsym(lib, fp->name);
+#endif /* _WIN32 */
+		if (u.fp == NULL) {
 			cry("set_ssl_option: cannot find %s", fp->name);
 			return (FALSE);
 		} else {
-			/*
-			 * ISO C forbids casts of data pointers to function
-			 * pointers. We need to use a union to make a cast.
-			 */
 			fp->ptr = u.fp;
 		}
+	}
 
 	/* Initialize SSL crap */
 	SSL_library_init();
@@ -3130,19 +3224,37 @@ reset_per_request_attributes(struct mg_connection *conn)
 }
 
 static void
+close_socket_gracefully(SOCKET sock)
+{
+	char	buf[BUFSIZ];
+	int	n;
+
+	/* Send FIN to the client */
+	(void) shutdown(sock, SD_SEND);
+
+	/*
+	 * Read and discard pending data. If we do not do that and close the
+	 * socket, the data in the send buffer may be discarded. This
+	 * behaviour is seen on Windows, when client keeps sending data
+	 * when server decide to close the connection; then when client
+	 * does recv() it gets no data back.
+	 */
+	do {
+		n = pull(-1, sock, NULL, buf, sizeof(buf));
+	} while (n > 0);
+
+	/* Now we know that our FIN is ACK-ed, safe to close */
+	(void) closesocket(sock);
+}
+
+static void
 close_connection(struct mg_connection *conn)
 {
 	reset_per_request_attributes(conn);
 	if (conn->ssl)
 		SSL_free(conn->ssl);
 	if (conn->sock != INVALID_SOCKET) {
-		/*
-		 * If shutdown() call is absent, Windows discards the content
-		 * of the socket buffer. So if the other side may receive
-		 * incomplete data.
-		 */
-		(void) shutdown(conn->sock, 2);
-		(void) closesocket(conn->sock);
+		close_socket_gracefully(conn->sock);
 	}
 	free(conn);
 }
