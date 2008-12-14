@@ -70,7 +70,7 @@
 #define	dlsym(x,y)		GetProcAddress(x,y)
 #define	_POSIX_
 #define	R_OK			04 /* for _access() */
-#define	SD_SEND			1
+#define	SHUT_WR			1
 #define	snprintf		_snprintf
 #define	vsnprintf		_vsnprintf
 #define	popen(x, y)		_popen(x, y)
@@ -127,7 +127,7 @@ typedef struct DIR {
 #define	O_BINARY		0
 #define	closesocket(a)		close(a)
 #define	mg_mkdir(x, y)		mkdir(x, y)
-#define	mg_open(x, y)		open(x, y)
+#define	mg_open(x, y, z)	open(x, y, z)
 #define	mg_remove(x)		remove(x)
 #define	mg_stat(x, y)		stat(x, y)
 #define	ERRNO			errno
@@ -3230,7 +3230,7 @@ close_socket_gracefully(SOCKET sock)
 	int	n;
 
 	/* Send FIN to the client */
-	(void) shutdown(sock, SD_SEND);
+	(void) shutdown(sock, SHUT_WR);
 
 	/*
 	 * Read and discard pending data. If we do not do that and close the
