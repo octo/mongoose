@@ -151,6 +151,8 @@ spawn($cmd);
 req('POST ' . '/..' x 100 . 'ABCD' x 3000 . "\n\n", 0); # don't log this one
 
 o("GET /hello.txt HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'GET regular file');
+o("GET /hello.txt HTTP/1.0\n\n", 'Content-Length: 17\s',
+	'GET regular file Content-Length');
 o("GET /%68%65%6c%6c%6f%2e%74%78%74 HTTP/1.0\n\n",
 	'HTTP/1.1 200 OK', 'URL-decoding');
 
@@ -168,6 +170,7 @@ o("GET /$test_dir_uri HTTP/1.0\n\n", 'HTTP/1.1 301', 'Directory redirection');
 o("GET /$test_dir_uri/ HTTP/1.0\n\n", 'Modified', 'Directory listing');
 open FD, ">$test_dir/index.html"; print FD "tralala"; close FD;
 o("GET /$test_dir_uri/ HTTP/1.0\n\n", 'tralala', 'Index substitution');
+o("GET / HTTP/1.0\n\n", 'embed.c', 'Directory listing - file name');
 o("GET /ta/ HTTP/1.0\n\n", 'Modified', 'Aliases');
 o("GET /not-exist HTTP/1.0\r\n\n", 'HTTP/1.1 404', 'Not existent file');
 o("GET /hello.txt HTTP/1.1\n\nGET /hello.txt HTTP/1.0\n\n",
@@ -225,6 +228,15 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 		'HTTP_MY_HDR=abc', 'HTTP_* env');
 	o("GET /env.cgi HTTP/1.0\n\r\nSOME_TRAILING_DATA_HERE",
 		'HTTP/1.1 200 OK', 'GET CGI with trailing data');
+
+	o("GET /env.cgi%20 HTTP/1.0\n\r\n",
+		'HTTP/1.1 404', 'CGI Win32 code disclosure (%20)');
+	o("GET /env.cgi%ff HTTP/1.0\n\r\n",
+		'HTTP/1.1 404', 'CGI Win32 code disclosure (%ff)');
+	o("GET /env.cgi%2e HTTP/1.0\n\r\n",
+		'HTTP/1.1 404', 'CGI Win32 code disclosure (%2e)');
+	o("GET /env.cgi%2b HTTP/1.0\n\r\n",
+		'HTTP/1.1 404', 'CGI Win32 code disclosure (%2b)');
 
 	my $auth_header = "Authorization: Digest  username=guest, ".
 		"realm=mydomain.com, nonce=1145872809, uri=/put.txt, ".
