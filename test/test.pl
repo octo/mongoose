@@ -52,7 +52,7 @@ sub req {
 	fail("Cannot connect: $!") unless $sock;
 	$sock->autoflush(1);
 	foreach my $byte (split //, $request) {
-		print $sock $byte;
+		last unless print $sock $byte;
 		select undef, undef, undef, .001 if length($request) < 256;
 	}
 	my @lines = <$sock>;
@@ -249,13 +249,26 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 		"HTTP/1.1 100 Continue.+HTTP/1.1 200", 'PUT 100-Continue');
 
 	# Check that CGI's current directory is set to script's directory
-	system("cp $root/env.cgi $test_dir");
+	my $copy_cmd = on_windows() ? 'copy' : 'cp';
+	system("$copy_cmd $root" . $dir_separator .  "env.cgi $test_dir" .
+	     $dir_separator . 'env.cgi');
 	o("GET /$test_dir_uri/env.cgi HTTP/1.0\n\n",
-		"CURRENT_DIR=.*$test_dir", "CGI chdir()");
-	o("GET /hello.shtml HTTP/1.0\n\n",
-		'inc_begin.+root.+inc_end', 'SSI (include)');
-	o("GET /hello.shtml HTTP/1.0\n\n",
-		'exec_begin.+Makefile.+exec_end', 'SSI (exec)');
+		"CURRENT_DIR=.*$root/$test_dir_uri", "CGI chdir()");
+
+	# SSI tests
+	o("GET /ssi1.shtml HTTP/1.0\n\n",
+		'ssi_begin.+CFLAGS.+ssi_end', 'SSI #include file=');
+	o("GET /ssi2.shtml HTTP/1.0\n\n",
+		'ssi_begin.+Unit test.+ssi_end', 'SSI #include virtual=');
+	my $ssi_exec = on_windows() ? 'ssi4.shtml' : 'ssi3.shtml';
+	o("GET /$ssi_exec HTTP/1.0\n\n",
+		'ssi_begin.+Makefile.+ssi_end', 'SSI #exec');
+	my $abs_path = on_windows() ? 'ssi6.shtml' : 'ssi5.shtml';
+	my $word = on_windows() ? 'boot loader' : 'root';
+	o("GET /$abs_path HTTP/1.0\n\n",
+		"ssi_begin.+$word.+ssi_end", 'SSI #include file= (absolute)');
+	o("GET /ssi7.shtml HTTP/1.0\n\n",
+		'ssi_begin.+Unit test.+ssi_end', 'SSI #include "..."');
 
 	# Manipulate the passwords file
 	my $path = 'test_htpasswd';
@@ -278,6 +291,11 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 sub do_embedded_test {
 	my $cmd = "cc -o $embed_exe $root/embed.c mongoose.c -I. ".
 			"-DNO_SSL -lpthread -DLISTENING_PORT=\\\"$port\\\"";
+	if (on_windows()) {
+		$cmd = "cl $root/embed.c mongoose.c /I. /nologo ".
+			"/DNO_SSL /DLISTENING_PORT=\\\"$port\\\" ".
+			"/link /out:$embed_exe.exe ws2_32.lib ";
+	}
 	print $cmd, "\n";
 	system($cmd) == 0 or fail("Cannot compile embedded unit test");
 
@@ -313,4 +331,4 @@ sub do_embedded_test {
 	kill_spawned_child();
 }
 
-print "SUCCESS! All tests are passed.\n";
+print "SUCCESS! All tests passed.\n";
