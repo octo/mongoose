@@ -2029,8 +2029,11 @@ parse_http_headers(char **buf, struct mg_request_info *ri)
 static bool_t
 is_known_http_method(const char *method)
 {
-	return (!strcmp(method, "GET") || !strcmp(method, "POST") ||
-	    !strcmp(method, "PUT") || !strcmp(method, "DELETE"));
+	return (!strcmp(method, "GET") ||
+	    !strcmp(method, "POST") ||
+	    !strcmp(method, "HEAD") ||
+	    !strcmp(method, "PUT") ||
+	    !strcmp(method, "DELETE"));
 }
 
 static bool_t
