@@ -76,13 +76,12 @@ typedef void (*mg_callback_t)(struct mg_connection *,
 /*
  * Functions dealing with initialization, starting and stopping Mongoose
  *
- * mg_start		Start serving thread. Make and returns server context.
+ * mg_start		Start serving thread. Return server context.
  * mg_stop		Stop server thread, and release the context.
  * mg_set_option	Set an option for the running context.
  * mg_get_option	Get an option for the running context.
  * mg_get_option_list	Get a list of all known options.
- * mg_bind_to_uri	Associate user function with URI, or error, or SSI.
- *			Passing NULL as function pointer means un-bind.
+ * mg_bind_to_uri	Associate user function with paticular URI.
  *			'*' in regex matches zero or more characters.
  * mg_bind_to_error_code Associate user function with HTTP error code.
  *			Passing 0 as error code binds function to all codes.
@@ -121,8 +120,8 @@ void mg_set_ssl_password_callback(struct mg_context *ctx, mg_spcb_t func);
  */
 int mg_write(struct mg_connection *, const void *buf, int len);
 int mg_printf(struct mg_connection *, const char *fmt, ...);
-const char *mg_get_header(const struct mg_connection *, const char *);
-char *mg_get_var(const struct mg_connection *, const char *);
+const char *mg_get_header(const struct mg_connection *, const char *hdr_name);
+char *mg_get_var(const struct mg_connection *, const char *var_name);
 const char *mg_version(void);
 void mg_md5(char *buf, ...);
 
