@@ -637,7 +637,7 @@ to_unicode(const char *path, wchar_t *wbuf, size_t wbuf_len)
 		buf[0] = '\0';
 	}
 
-	MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, wbuf_len);
+	MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, (int) wbuf_len);
 }
 
 static int
@@ -645,7 +645,7 @@ mg_open(const char *path, int flags, int mode)
 {
 	wchar_t	wbuf[FILENAME_MAX];
 
-	to_unicode(path, wbuf, sizeof(wbuf));
+	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
 
 	return (_wopen(wbuf, flags, mode));
 }
@@ -655,7 +655,7 @@ mg_stat(const char *path, struct stat *stp)
 {
 	wchar_t	wbuf[FILENAME_MAX];
 
-	to_unicode(path, wbuf, sizeof(wbuf));
+	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
 
 	return (_wstat(wbuf, (struct _stat *) stp));
 }
@@ -665,7 +665,7 @@ mg_remove(const char *path)
 {
 	wchar_t	wbuf[FILENAME_MAX];
 
-	to_unicode(path, wbuf, sizeof(wbuf));
+	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
 
 	return (_wremove(wbuf));
 }
@@ -683,7 +683,7 @@ opendir(const char *name)
 		errno = ENOMEM;
 	} else {
 		mg_snprintf(path, sizeof(path), "%s/*", name);
-		to_unicode(path, wpath, sizeof(wpath));
+		to_unicode(path, wpath, ARRAY_SIZE(wpath));
 		dir->handle = FindFirstFileW(wpath, &dir->info);
 
 		if (dir->handle != INVALID_HANDLE_VALUE) {
