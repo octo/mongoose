@@ -749,7 +749,6 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		char *envp[], int fd_stdin, int fd_stdout, const char *dir)
 {
 	HANDLE	me;
-	DWORD	flags;
 	char	*p, *interp, cmdline[FILENAME_MAX], line[FILENAME_MAX];
 	FILE	*fp;
 	bool_t	retval;
@@ -757,7 +756,6 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	PROCESS_INFORMATION	pi;
 
 	envp = NULL; /* Unused */
-	flags = DUPLICATE_CLOSE_SOURCE | DUPLICATE_SAME_ACCESS;
 
 	(void) memset(&si, 0, sizeof(si));
 	(void) memset(&pi, 0, sizeof(pi));
@@ -769,9 +767,9 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 
 	me = GetCurrentProcess();
 	DuplicateHandle(me, (HANDLE) _get_osfhandle(fd_stdin), me,
-	    &si.hStdInput, 0, TRUE, flags);
+	    &si.hStdInput, 0, TRUE, DUPLICATE_SAME_ACCESS);
 	DuplicateHandle(me, (HANDLE) _get_osfhandle(fd_stdout), me,
-	    &si.hStdOutput, 0, TRUE, flags);
+	    &si.hStdOutput, 0, TRUE, DUPLICATE_SAME_ACCESS);
 
 	/* If CGI file is a script, try to read the interpreter line */
 	interp = conn->ctx->options[OPT_CGI_INTERPRETER];
