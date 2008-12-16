@@ -332,7 +332,6 @@ main(int argc, char *argv[])
 		show_usage_and_exit(argv[0]);
 
 #if defined(_WIN32)
-	{FILE  *fp = fopen("d:\\mongoose\\a.txt", "a+"); fprintf(fp, "hello"); fclose(fp); }
 	(void) sprintf(service_name, "Mongoose %s", mg_version());
 	try_to_run_as_nt_service();
 #endif /* _WIN32 */
