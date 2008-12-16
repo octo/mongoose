@@ -192,7 +192,7 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 		/* No config file specified. Look for one where binary lives */
 		if ((p = strrchr(argv[0], DIRSEP)) != 0) {
 			snprintf(path, sizeof(path), "%.*s%s",
-			    p - argv[0] + 1, argv[0], config_file);
+			    (int) (p - argv[0]) + 1, argv[0], config_file);
 			config_file = path;
 		}
 	}
