@@ -76,6 +76,7 @@
 #define	popen(x, y)		_popen(x, y)
 #define	pclose(x)		_pclose(x)
 #define	access(x, y)		_access(x, y)
+#define	getcwd(x, y)		_getcwd(x, y)
 #define	strtoull(x, y, z)	_strtoui64(x, y, z)
 #define	write(x, y, z)		_write(x, y, (unsigned) z)
 #define	read(x, y, z)		_read(x, y, (unsigned) z)
@@ -3090,7 +3091,7 @@ set_admin_uri_option(struct mg_context *ctx, const char *uri)
 }
 
 static const struct mg_option known_options[] = {
-	{"root", "\tWeb root directory", "."},
+	{"root", "\tWeb root directory", NULL},
 	{"index_files",	"Index files", "index.html,index.htm,index.cgi"},
 #if !defined(NO_SSL)
 	{"ssl_cert", "SSL certificate file", NULL},
@@ -3454,6 +3455,9 @@ mg_start(void)
 				mg_fini(ctx);
 				return (NULL);
 			}
+
+	/* Initial document root is set to current working directory */
+	ctx->options[OPT_ROOT] = getcwd(NULL, 0);
 
 #if 0
 	tm->tm_gmtoff - 3600 * (tm->tm_isdst > 0 ? 1 : 0);
