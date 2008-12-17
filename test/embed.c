@@ -29,7 +29,7 @@
 #include "mongoose.h"
 
 #if !defined(LISTENING_PORT)
-#define LISTENING_PORT	23456
+#define LISTENING_PORT	"23456"
 #endif /* !LISTENING_PORT */
 
 static struct mg_context *ctx;
