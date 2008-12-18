@@ -485,6 +485,7 @@ mg_get_header(const struct mg_connection *conn, const char *name)
 	return (get_header(&conn->request_info, name));
 }
 
+#if !(defined(NO_CGI) && defined(NO_SSI))
 /*
  * Verify that given file has certain extension
  */
@@ -502,6 +503,7 @@ match_extension(const char *path, const char *ext_list)
 
 	return (FALSE);
 }
+#endif /* !(NO_CGI && NO_SSI) */
 
 static bool_t
 match_regex(const char *uri, const char *regexp)
@@ -2454,6 +2456,7 @@ done:
 }
 #endif /* !NO_CGI */
 
+#if !defined(NO_AUTH)
 /*
  * For a given PUT path, create all intermediate subdirectories
  * for given path. Return 0 if the path itself is a directory,
@@ -2513,6 +2516,7 @@ put_file(struct mg_connection *conn, const char *path)
 		(void) close(fd);
 	}
 }
+#endif /* NO_AUTH */
 
 #if !defined(NO_SSI)
 static void
@@ -3027,12 +3031,14 @@ set_elog_option(struct mg_context *ctx, const char *path)
 	return (open_log_file(&ctx->error_log, path));
 }
 
+#if !defined(NO_AUTH)
 static bool_t
 set_gpass_option(struct mg_context *ctx, const char *path)
 {
 	ctx = NULL;
 	return (access(path, R_OK) == 0);
 }
+#endif /* !NO_AUTH */
 
 static void
 admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
