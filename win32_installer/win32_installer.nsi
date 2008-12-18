@@ -1,4 +1,4 @@
-!define VERSION "2.0"
+!define VERSION "2.1"
 !define MENUDIR "Mongoose web server"
 !define	SVC "Mongoose ${VERSION}"
 
@@ -16,7 +16,10 @@ Section "Mongoose files (required)"
   SectionIn RO
   SetOutPath $INSTDIR
   File ..\mongoose.exe
+  File ..\mongoose.dll
+  File ..\mongoose.lib
   File mongoose.conf
+  File README.txt
   WriteUninstaller uninstall.exe
 SectionEnd
 
