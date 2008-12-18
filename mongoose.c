@@ -147,7 +147,7 @@ typedef int SOCKET;
 #define	MAX_LISTENING_SOCKETS	10
 #define	MAX_CALLBACKS		20
 #define	ARRAY_SIZE(array)	(sizeof(array) / sizeof(array[0]))
-#define	UNKNOWN_CONTENT_LENGTH	~0ULL
+#define	UNKNOWN_CONTENT_LENGTH	((uint64_t) ~0ULL)
 
 /*
  * Darwin prior to 7.0 and Win32 do not have socklen_t
@@ -210,7 +210,7 @@ struct ssl_func {
 #define SSL_CTX_set_default_passwd_cb(x,y) \
 	(* (void (*)(SSL_CTX *, mg_spcb_t))FUNC(13))((x),(y))
 
-struct ssl_func	ssl_sw[] = {
+static struct ssl_func	ssl_sw[] = {
 	{"SSL_free",			NULL},
 	{"SSL_accept",			NULL},
 	{"SSL_connect",			NULL},
@@ -288,7 +288,7 @@ struct mg_context {
 struct mg_connection {
 	struct mg_request_info	request_info;
 	struct mg_context *ctx;		/* Mongoose context we belong to*/
-	void		*ssl;		/* SSL descriptor		*/
+	SSL		*ssl;		/* SSL descriptor		*/
 	SOCKET		sock;		/* Connected socket		*/
 	struct usa	rsa;		/* Remote socket address	*/
 	struct usa	lsa;		/* Local socket address		*/
@@ -372,7 +372,7 @@ mg_strndup(const char *ptr, size_t len)
 {
 	char	*p;
 
-	if ((p = malloc(len + 1)) != NULL)
+	if ((p = (char *) malloc(len + 1)) != NULL)
 		mg_strlcpy(p, ptr, len + 1);
 
 	return (p);
@@ -680,7 +680,7 @@ opendir(const char *name)
 
 	if (name == NULL || name[0] == '\0') {
 		errno = EINVAL;
-	} else if ((dir = malloc(sizeof(*dir))) == NULL) {
+	} else if ((dir = (DIR *) malloc(sizeof(*dir))) == NULL) {
 		errno = ENOMEM;
 	} else {
 		mg_snprintf(path, sizeof(path), "%s/*", name);
@@ -944,7 +944,7 @@ mg_unlock(struct mg_context *ctx)
  * descriptor. Return number of bytes written.
  */
 static uint64_t
-push(int fd, SOCKET sock, void *ssl, const char *buf, uint64_t len)
+push(int fd, SOCKET sock, SSL *ssl, const char *buf, uint64_t len)
 {
 	uint64_t	sent;
 	int		n, k;
@@ -979,7 +979,7 @@ push(int fd, SOCKET sock, void *ssl, const char *buf, uint64_t len)
  * Return number of bytes read.
  */
 static int
-pull(int fd, SOCKET sock, void *ssl, char *buf, int len)
+pull(int fd, SOCKET sock, SSL *ssl, char *buf, int len)
 {
 	int	nread;
 
@@ -1001,7 +1001,8 @@ int
 mg_write(struct mg_connection *conn, const void *buf, int len)
 {
 	assert(len >= 0);
-	return ((int) push(-1, conn->sock, conn->ssl, buf, (uint64_t) len));
+	return ((int) push(-1, conn->sock, conn->ssl,
+				(const char *) buf, (uint64_t) len));
 }
 
 int
@@ -1086,7 +1087,8 @@ get_var(const char *name, const char *buf, size_t buf_len)
 			p += var_len + 1;
 
 			/* Point s to the end of the value */
-			if ((s = memchr(p, '&', e - p)) == NULL)
+			s = (const char *) memchr(p, '&', e - p);
+			if (s == NULL)
 				s = e;
 
 			/* URL-decode value. Return result length */
@@ -1140,7 +1142,8 @@ make_path(struct mg_context *ctx, const char *uri, char *buf, size_t buf_len)
        	s = ctx->options[OPT_ALIASES];
 	FOR_EACH_WORD_IN_LIST(s, len) {
 
-		if ((p = memchr(s, '=', len)) == NULL || p >= s + len || p == s)
+		p = (char *) memchr(s, '=', len);
+		if (p == NULL || p >= s + len || p == s)
 			continue;
 
 		if (memcmp(uri, s, p - s) == 0) {
@@ -1797,7 +1800,8 @@ check_authorization(struct mg_connection *conn, const char *path)
 	s = conn->ctx->options[OPT_PROTECT];
 	FOR_EACH_WORD_IN_LIST(s, len) {
 
-		if ((p = memchr(s, '=', len)) == NULL || p >= s + len || p == s)
+		p = (const char *) memchr(s, '=', len);
+		if (p == NULL || p >= s + len || p == s)
 			continue;
 
 		if (!memcmp(conn->request_info.uri, s, p - s)) {
@@ -2061,7 +2065,7 @@ parse_http_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
 }
 
 static int
-read_request(int fd, SOCKET sock, void *ssl, char *buf, int bufsiz, int *nread)
+read_request(int fd, SOCKET sock, SSL *ssl, char *buf, int bufsiz, int *nread)
 {
 	int	n, request_len;
 
@@ -2159,7 +2163,7 @@ append_chunk(struct mg_request_info *ri, int fd, const char *buf, int len)
 
 	if (fd == -1) {
 		/* TODO: check for NULL here */
-		ri->post_data = realloc(ri->post_data,
+		ri->post_data = (char *) realloc(ri->post_data,
 		    ri->post_data_len + len);
 		(void) memcpy(ri->post_data + ri->post_data_len, buf, len);
 		ri->post_data_len += len;
@@ -2206,7 +2210,7 @@ handle_request_body(struct mg_connection *conn, int fd)
 				conn->free_post_data = TRUE;
 				tmp = ri->post_data;
 				/* +1 in case if already_read == 0 */
-				ri->post_data = malloc(already_read + 1);
+				ri->post_data = (char*)malloc(already_read + 1);
 				(void) memcpy(ri->post_data, tmp, already_read);
 			} else {
 				(void) push(fd, INVALID_SOCKET, NULL,
@@ -3352,7 +3356,7 @@ accept_new_connection(const struct listener *l, struct mg_context *ctx)
 {
 	struct mg_connection *conn;
 
-	if ((conn = calloc(1, sizeof(*conn))) == NULL) {
+	if ((conn = (struct mg_connection*) calloc(1, sizeof(*conn))) == NULL) {
 		cry("Cannot allocate new connection info");
 	} else if ((conn->rsa.len = sizeof(conn->rsa.u.sin)) <= 0) {
 		/* Never ever happens. */
@@ -3435,7 +3439,7 @@ mg_start(void)
 	struct mg_context	*ctx;
 	int			i;
 
-	if ((ctx = calloc(1, sizeof(*ctx))) == NULL) {
+	if ((ctx = (struct mg_context *) calloc(1, sizeof(*ctx))) == NULL) {
 		cry("cannot allocate mongoose context");
 		return (NULL);
 	}
