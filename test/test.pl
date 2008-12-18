@@ -143,7 +143,7 @@ kill_spawned_child();
 
 # Spawn the server on port $port
 my $cmd = "$exe -ports $port -access_log access.log -error_log debug.log ".
-		"-root test -aliases $alias -auth_PUT test/passfile";
+		"-root test -aliases $alias";
 $cmd .= ' -cgi_interp perl' if on_windows();
 spawn($cmd);
 
@@ -238,28 +238,6 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 	o("GET /env.cgi%2b HTTP/1.0\n\r\n",
 		'HTTP/1.1 404', 'CGI Win32 code disclosure (%2b)');
 
-	my $auth_header = "Authorization: Digest  username=guest, ".
-		"realm=mydomain.com, nonce=1145872809, uri=/put.txt, ".
-		"response=896327350763836180c61d87578037d9, qop=auth, ".
-		"nc=00000002, cnonce=53eddd3be4e26a98\n";
-
-	o("PUT /put.txt HTTP/1.0\nContent-Length: 7\n$auth_header\n1234567",
-		"HTTP/1.1 201 OK", 'PUT file, status 201');
-	fail("PUT content mismatch")
-		unless read_file("$root/put.txt") eq '1234567';
-	o("PUT /put.txt HTTP/1.0\nContent-Length: 4\n$auth_header\nabcd",
-		"HTTP/1.1 200 OK", 'PUT file, status 200');
-	fail("PUT content mismatch")
-		unless read_file("$root/put.txt") eq 'abcd';
-	o("PUT /put.txt HTTP/1.0\n$auth_header\nabcd",
-		"HTTP/1.1 411 Length Required", 'PUT 411 error');
-	o("PUT /put.txt HTTP/1.0\nExpect: blah\nContent-Length: 1\n".
-		"$auth_header\nabcd",
-		"HTTP/1.1 417 Expectation Failed", 'PUT 417 error');
-	o("PUT /put.txt HTTP/1.0\nExpect: 100-continue\nContent-Length: 4\n".
-		"$auth_header\nabcd",
-		"HTTP/1.1 100 Continue.+HTTP/1.1 200", 'PUT 100-Continue');
-
 	# Check that CGI's current directory is set to script's directory
 	my $copy_cmd = on_windows() ? 'copy' : 'cp';
 	system("$copy_cmd $root" . $dir_separator .  "env.cgi $test_dir" .
@@ -297,7 +275,36 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 	unlink $path;
 
 	kill_spawned_child();
+	do_PUT_test();
 	do_embedded_test();
+}
+
+sub do_PUT_test {
+	$cmd .= ' -auth_PUT test/passfile';
+	spawn($cmd);
+
+	my $auth_header = "Authorization: Digest  username=guest, ".
+		"realm=mydomain.com, nonce=1145872809, uri=/put.txt, ".
+		"response=896327350763836180c61d87578037d9, qop=auth, ".
+		"nc=00000002, cnonce=53eddd3be4e26a98\n";
+
+	o("PUT /put.txt HTTP/1.0\nContent-Length: 7\n$auth_header\n1234567",
+		"HTTP/1.1 201 OK", 'PUT file, status 201');
+	fail("PUT content mismatch")
+		unless read_file("$root/put.txt") eq '1234567';
+	o("PUT /put.txt HTTP/1.0\nContent-Length: 4\n$auth_header\nabcd",
+		"HTTP/1.1 200 OK", 'PUT file, status 200');
+	fail("PUT content mismatch")
+		unless read_file("$root/put.txt") eq 'abcd';
+	o("PUT /put.txt HTTP/1.0\n$auth_header\nabcd",
+		"HTTP/1.1 411 Length Required", 'PUT 411 error');
+	o("PUT /put.txt HTTP/1.0\nExpect: blah\nContent-Length: 1\n".
+		"$auth_header\nabcd",
+		"HTTP/1.1 417 Expectation Failed", 'PUT 417 error');
+	o("PUT /put.txt HTTP/1.0\nExpect: 100-continue\nContent-Length: 4\n".
+		"$auth_header\nabcd",
+		"HTTP/1.1 100 Continue.+HTTP/1.1 200", 'PUT 100-Continue');
+	kill_spawned_child();
 }
 
 sub do_embedded_test {
