@@ -2203,9 +2203,9 @@ handle_request_body(struct mg_connection *conn, int fd)
 
 		if (content_len <= (uint64_t) already_read) {
 			ri->post_data_len = (int) content_len;
-			if (fd != -1 && push(fd, INVALID_SOCKET, NULL,
-			    ri->post_data, content_len) == content_len)
-				success_code = TRUE;
+			success_code = (fd == -1) || (push(fd, INVALID_SOCKET,
+			    NULL, ri->post_data, content_len) == content_len) ?
+			    TRUE : FALSE;
 		} else {
 
 			if (fd == -1) {
@@ -2227,11 +2227,10 @@ handle_request_body(struct mg_connection *conn, int fd)
 					to_read = (int) content_len;
 				nread = pull(-1, conn->sock,
 				    conn->ssl, buf, to_read);
-				if (nread <= 0) {
+				if (nread <= 0)
 					break;
-				} else if (!append_chunk(ri, fd, buf, nread)) {
+				if (!append_chunk(ri, fd, buf, nread))
 					break;
-				}
 				content_len -= nread;
 			}
 			success_code = content_len == 0 ? TRUE : FALSE;
