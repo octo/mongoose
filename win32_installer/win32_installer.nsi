@@ -1,8 +1,8 @@
-!define VERSION "2.1"
+!define VERSION "2.2"
 !define MENUDIR "Mongoose web server"
 !define	SVC "Mongoose ${VERSION}"
 
-OutFile mongoose.${VERSION}.install.exe
+OutFile mongoose-${VERSION}.install.exe
 Name "Mongoose ${VERSION}"
 InstallDir C:\mongoose-${VERSION}
 
