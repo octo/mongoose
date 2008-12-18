@@ -17,13 +17,12 @@ for (my $i = 0; $i < 2 ** $num_flags; $i++) {
 		push @combination, $flags[$j] if substr($bitmask, $j, 1);
 	}
 	my $defines = join(" ", map { "-D$_" } @combination);
-	my $cmd = "cd ../src && CFLAGS=\"$defines\" " .
-		"make clean $platform >/dev/null";
+	my $cmd = "CFLAGS=\"$defines\" make clean $platform >/dev/null";
 	system($cmd) == 0 or fail "build failed: $_";
-	print "PASS: build with $defines\n";
-	system("perl test.pl basic_tests") == 0
+	print "Build succeeded, flags: [$defines]\n";
+	system("perl test/test.pl basic_tests >/dev/null") == 0
 		or fail "basic tests";
-	print "PASS: basic tests\n";
+	print "Basic tests: OK\n";
 }
 
 print "PASS: All builds passed!\n";
