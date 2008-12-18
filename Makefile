@@ -31,9 +31,19 @@ rtems:
 # 3. Go to c:\msvc8\vc\bin and start "VIsual Studio 2008 Command prompt"
 #    (or Itanium/amd64 command promt to build x64 version)
 # 4. In the command prompt, go to mongoose directory and do "nmake windows"
-windows:
-	cl /MT /TC /nologo /DNDEBUG /Os /W4 /D_CRT_SECURE_NO_WARNINGS \
-		$(SRCS) /link /out:$(PROG).exe ws2_32.lib advapi32.lib
+
+#WINDBG=	/Zi /DDEBUG /Od
+WINDBG=	/DNDEBUG /Os
+WINOPT=	/MT /TC $(WINDBG) /nologo /DNDEBUG /W4 /D_CRT_SECURE_NO_WARNINGS
+windows: winexe windll
+
+windll:
+	cl $(WINOPT) mongoose.c /link /incremental:no /DLL /DEF:dll.def \
+		/out:$(PROG).dll ws2_32.lib
+
+winexe:
+	cl $(WINOPT) $(SRCS) /link /incremental:no \
+		/out:$(PROG).exe ws2_32.lib advapi32.lib
 
 man:
 	cat mongoose.1 | tbl | groff -man -Tascii | col -b > mongoose.1.txt
