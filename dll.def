@@ -1,0 +1,16 @@
+LIBRARY
+EXPORTS
+	mg_start
+	mg_stop
+	mg_get_option_list
+	mg_get_option
+	mg_set_option
+	mg_bind_to_uri
+	mg_bind_to_error_code
+	mg_set_ssl_password_callback
+	mg_write
+	mg_printf
+	mg_get_header
+	mg_get_var
+	mg_version
+	mg_md5 
