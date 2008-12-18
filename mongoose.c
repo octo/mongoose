@@ -2203,6 +2203,12 @@ handle_request_body(struct mg_connection *conn, int fd)
 
 		if (content_len <= (uint64_t) already_read) {
 			ri->post_data_len = (int) content_len;
+			/*
+			 * If fd == -1, this is embedded mode, and we do not
+			 * have to do anything: POST data is already there,
+			 * no need to allocate a buffer and copy it in.
+			 * If fd != -1, we need to write the data.
+			 */
 			success_code = (fd == -1) || (push(fd, INVALID_SOCKET,
 			    NULL, ri->post_data, content_len) == content_len) ?
 			    TRUE : FALSE;
