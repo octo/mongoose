@@ -27,6 +27,7 @@
 #include <signal.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 
 #include "mongoose.h"
 
