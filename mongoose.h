@@ -10,7 +10,7 @@
  *
  * The above copyright notice and this permission notice shall be included in
  * all copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -67,13 +67,6 @@ struct mg_option {
 };
 
 /*
- * User-defined function prototype.
- * It is passed opaque connection handle, and request information structure.
- */
-typedef void (*mg_callback_t)(struct mg_connection *,
-		const struct mg_request_info *info, void *user_data);
-
-/*
  * Functions dealing with initialization, starting and stopping Mongoose
  *
  * mg_start		Start serving thread. Return server context.
@@ -81,11 +74,15 @@ typedef void (*mg_callback_t)(struct mg_connection *,
  * mg_set_option	Set an option for the running context.
  * mg_get_option	Get an option for the running context.
  * mg_get_option_list	Get a list of all known options.
- * mg_bind_to_uri	Associate user function with paticular URI.
+ * mg_handle_uri	Associate user function with paticular URI.
  *			'*' in regex matches zero or more characters.
- * mg_bind_to_error_code Associate user function with HTTP error code.
+ * mg_handle_error_code	Associate user function with HTTP error code.
  *			Passing 0 as error code binds function to all codes.
  *			Error code is passed as status_code in request info.
+ * mg_protect_uri	Similar to "protect" option, but uses a user
+ *			specified function instead of the passwords file.
+ *			User specified function is passed user name, and must
+ *			return 1 if user is authorized, and 0 if not.
  */
 
 struct mg_context *mg_start(void);
@@ -93,16 +90,22 @@ void mg_stop(struct mg_context *);
 const struct mg_option *mg_get_option_list(void);
 const char *mg_get_option(struct mg_context *, const char *);
 int mg_set_option(struct mg_context *, const char *, const char *);
-void mg_bind_to_uri(struct mg_context *ctx, const char *regex,
+
+typedef void (*mg_callback_t)(struct mg_connection *,
+		const struct mg_request_info *info, void *user_data);
+
+void mg_bind_to_uri(struct mg_context *ctx, const char *uri_regex,
 		mg_callback_t func, void *user_data);
 void mg_bind_to_error_code(struct mg_context *ctx, int error_code,
+		mg_callback_t func, void *user_data);
+void mg_protect_uri(struct mg_context *ctx, const char *uri_regex,
 		mg_callback_t func, void *user_data);
 
 /*
  * Needed only if SSL certificate asks for a password.
  * Instead of prompting for a password, specified function will be called.
  */
-typedef int (*mg_spcb_t)(char *buf, int num, int w, void *key); 
+typedef int (*mg_spcb_t)(char *buf, int num, int w, void *key);
 void mg_set_ssl_password_callback(struct mg_context *ctx, mg_spcb_t func);
 
 /*
@@ -113,15 +116,19 @@ void mg_set_ssl_password_callback(struct mg_context *ctx, mg_spcb_t func);
  * mg_get_header Helper function to get HTTP header value
  * mg_get_var	Helper function to get form variable value.
  *		Returned value must be free-d by the caller.
- * mg_version	Return current version.
- * mg_md5	Helper function. buf must be 33 bytes in size. Expects
- *		a NULL terminated list of asciz strings.
- *		Fills buf with stringified \0 terminated MD5 hash.
  */
 int mg_write(struct mg_connection *, const void *buf, int len);
 int mg_printf(struct mg_connection *, const char *fmt, ...);
 const char *mg_get_header(const struct mg_connection *, const char *hdr_name);
 char *mg_get_var(const struct mg_connection *, const char *var_name);
+
+/*
+ * General helper functions
+ * mg_version	Return current version.
+ * mg_md5	Helper function. buf must be 33 bytes in size. Expects
+ *		a NULL terminated list of asciz strings.
+ *		Fills buf with stringified \0 terminated MD5 hash.
+ */
 const char *mg_version(void);
 void mg_md5(char *buf, ...);
 

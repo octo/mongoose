@@ -257,10 +257,11 @@ struct listener {
  * Callback function, and where it is bound to
  */
 struct callback {
-	const char		*regex;
-	mg_callback_t		func;
-	int			status_code;
-	void			*user_data;
+	const char		*uri_regex;	/* URI regex to handle	*/
+	mg_callback_t		func;		/* user callback	*/
+	bool_t			is_auth;	/* func is auth checker	*/
+	int			status_code;	/* error code to handle	*/
+	void			*user_data;	/* opaque user data	*/
 };
 
 /*
@@ -524,15 +525,17 @@ match_regex(const char *uri, const char *regexp)
 }
 
 static const struct callback *
-find_callback(const struct mg_context *ctx, const char *uri, int status_code)
+find_callback(const struct mg_context *ctx, bool_t is_auth,
+		const char *uri, int status_code)
 {
 	const struct callback	*cb;
 	int			i;
 
 	for (i = 0; i < ctx->num_callbacks; i++) {
 		cb = ctx->callbacks + i;
-		if ((uri != NULL && cb->regex != NULL &&
-		    match_regex(uri, cb->regex)) || (uri == NULL &&
+		if ((uri != NULL && cb->uri_regex != NULL &&
+		    ((is_auth && cb->is_auth) || (!is_auth && !cb->is_auth)) &&
+		    match_regex(uri, cb->uri_regex)) || (uri == NULL &&
 		     (cb->status_code == 0 || cb->status_code == status_code)))
 		    return (cb);
 	}
@@ -555,7 +558,7 @@ send_error(struct mg_connection *conn, int status, const char *reason,
 	conn->request_info.status_code = status;
 
 	/* If error handler is set, call it. Otherwise, send error message */
-	if ((cb = find_callback(conn->ctx, NULL, status)) != NULL) {
+	if ((cb = find_callback(conn->ctx, FALSE, NULL, status)) != NULL) {
 		cb->func(conn, &conn->request_info, cb->user_data);
 	} else {
 		(void) mg_printf(conn,
@@ -608,7 +611,7 @@ fix_directory_separators(char *path)
 		if (*path == '/')
 			*path = '\\';
 		if (*path == '\\')
-			while (path[1] == '\\' || path[1] == '/') 
+			while (path[1] == '\\' || path[1] == '/')
 				(void) memmove(path + 1,
 				    path + 2, strlen(path + 2) + 1);
 	}
@@ -1709,15 +1712,15 @@ open_auth_file(struct mg_context *ctx, const char *path)
 	return (fp);
 }
 
-/*
- * Authorize against the opened passwords file. Return 1 if authorized.
- */
+struct ah {
+	char	*user, *uri, *cnonce, *response, *qop, *nc, *nonce;
+};
+
 static bool_t
-authorize(struct mg_connection *conn, FILE *fp)
+parse_auth_header(struct mg_connection *conn, char *buf, size_t buf_size,
+		struct ah *ah)
 {
-	char		line[256], f_user[256], domain[256], ha1[256];
-	char 		*user, *uri, *nonce, *cnonce, *response, *qop, *nc;
-	char		*name, *value, *s, buf[MAX_REQUEST_SIZE];
+	char		*name, *value, *s;
 	const char	*auth_header;
 
 	if ((auth_header = mg_get_header(conn, "Authorization")) == NULL ||
@@ -1725,10 +1728,10 @@ authorize(struct mg_connection *conn, FILE *fp)
 		return (FALSE);
 
 	/* Make modifiable copy of the auth header */
-	(void) mg_strlcpy(buf, auth_header + 7, sizeof(buf));
+	(void) mg_strlcpy(buf, auth_header + 7, buf_size);
 
 	s = buf;
-	user = uri = nonce = cnonce = response = qop = nc = NULL;
+	(void) memset(ah, 0, sizeof(*ah));
 
 	/* Gobble initial spaces */
 	while (isspace(* (unsigned char *) s))
@@ -1747,25 +1750,41 @@ authorize(struct mg_connection *conn, FILE *fp)
 		}
 
 		if (!strcmp(name, "username")) {
-			user = value;
+			ah->user = value;
 		} else if (!strcmp(name, "cnonce")) {
-			cnonce = value;
+			ah->cnonce = value;
 		} else if (!strcmp(name, "response")) {
-			response = value;
+			ah->response = value;
 		} else if (!strcmp(name, "uri")) {
-			uri = value;
+			ah->uri = value;
 		} else if (!strcmp(name, "qop")) {
-			qop = value;
+			ah->qop = value;
 		} else if (!strcmp(name, "nc")) {
-			nc = value;
+			ah->nc = value;
 		} else if (!strcmp(name, "nonce")) {
-			nonce = value;
+			ah->nonce = value;
 		}
 	}
 
 	/* CGI needs it as REMOTE_USER */
-	if (user != NULL)
-		conn->request_info.remote_user = mg_strdup(user);
+	if (ah->user != NULL)
+		conn->request_info.remote_user = mg_strdup(ah->user);
+
+	return (TRUE);
+}
+
+/*
+ * Authorize against the opened passwords file. Return 1 if authorized.
+ */
+static bool_t
+authorize(struct mg_connection *conn, FILE *fp)
+{
+	struct ah	ah;
+	char		line[256], f_user[256], domain[256], ha1[256],
+			buf[MAX_REQUEST_SIZE];
+
+	if (!parse_auth_header(conn, buf, sizeof(buf), &ah))
+		return (FALSE);
 
 	/* Loop over passwords file */
 	while (fgets(line, sizeof(line), fp) != NULL) {
@@ -1773,11 +1792,12 @@ authorize(struct mg_connection *conn, FILE *fp)
 		if (sscanf(line, "%[^:]:%[^:]:%s", f_user, domain, ha1) != 3)
 			continue;
 
-		if (!strcmp(user, f_user) &&
+		if (!strcmp(ah.user, f_user) &&
 		    !strcmp(domain, conn->ctx->options[OPT_AUTH_DOMAIN]))
 			return (check_password(
 			    conn->request_info.request_method, ha1,
-			    uri, nonce, nc, cnonce, qop, response));
+			    ah.uri, ah.nonce, ah.nc, ah.cnonce,
+			    ah.qop, ah.response));
 	}
 
 	return (FALSE);
@@ -1793,6 +1813,7 @@ check_authorization(struct mg_connection *conn, const char *path)
 	size_t		len, n;
 	char		protected_path[FILENAME_MAX];
 	const char	*p, *s;
+	const struct callback *cb;
 	bool_t		authorized;
 
 	fp = NULL;
@@ -1828,6 +1849,19 @@ check_authorization(struct mg_connection *conn, const char *path)
 	if (fp != NULL) {
 		authorized = authorize(conn, fp);
 		(void) fclose(fp);
+	}
+
+	if ((cb = find_callback(conn->ctx, TRUE,
+	    conn->request_info.uri, -1)) != NULL) {
+		struct ah	ah;
+		char		buf[MAX_REQUEST_SIZE];
+		void		*user_data = cb->user_data;
+
+		authorized = FALSE;
+		if (parse_auth_header(conn, buf, sizeof(buf), &ah)) {
+			cb->func(conn, &conn->request_info, &user_data);
+			authorized = (bool_t) user_data;
+		}
 	}
 
 	return (authorized);
@@ -2119,14 +2153,15 @@ send_index_file(struct mg_connection *conn,
 }
 
 static void
-mg_bind(struct mg_context *ctx, const char *regex, int status_code,
-		mg_callback_t func, void *user_data)
+mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
+		mg_callback_t func, bool_t is_auth, void *user_data)
 {
 	if (ctx->num_callbacks >= (int) ARRAY_SIZE(ctx->callbacks) - 1) {
 		cry("Too many callbacks! Increase MAX_CALLBACKS.");
 	} else {
-		ctx->callbacks[ctx->num_callbacks].regex = regex;
+		ctx->callbacks[ctx->num_callbacks].uri_regex = uri_regex;
 		ctx->callbacks[ctx->num_callbacks].func = func;
+		ctx->callbacks[ctx->num_callbacks].is_auth = is_auth;
 		ctx->callbacks[ctx->num_callbacks].status_code = status_code;
 		ctx->callbacks[ctx->num_callbacks].user_data = user_data;
 		ctx->num_callbacks++;
@@ -2134,12 +2169,12 @@ mg_bind(struct mg_context *ctx, const char *regex, int status_code,
 }
 
 void
-mg_bind_to_uri(struct mg_context *ctx, const char *regex,
+mg_bind_to_uri(struct mg_context *ctx, const char *uri_regex,
 		mg_callback_t func, void *user_data)
 {
 	assert(func != NULL);
-	assert(regex != NULL);
-	mg_bind(ctx, regex, -1, func, user_data);
+	assert(uri_regex != NULL);
+	mg_bind(ctx, uri_regex, -1, func, FALSE, user_data);
 }
 
 void
@@ -2148,7 +2183,16 @@ mg_bind_to_error_code(struct mg_context *ctx, int error_code,
 {
 	assert(error_code >= 0 && error_code < 1000);
 	assert(func != NULL);
-	mg_bind(ctx, NULL, error_code, func, user_data);
+	mg_bind(ctx, NULL, error_code, func, FALSE, user_data);
+}
+
+void
+mg_protect_uri(struct mg_context *ctx, const char *uri_regex,
+		mg_callback_t func, void *user_data)
+{
+	assert(func != NULL);
+	assert(uri_regex != NULL);
+	mg_bind(ctx, uri_regex, -1, func, TRUE, user_data);
 }
 
 static int
@@ -2550,7 +2594,7 @@ do_ssi_include(struct mg_connection *conn, const char *ssi, char *tag)
 		/* File name is relative to the currect document */
 		(void) mg_snprintf(path, sizeof(path), "%s", ssi);
 		if ((p = strrchr(path, DIRSEP)) != NULL)
-			p[1] = '\0'; 
+			p[1] = '\0';
 		(void) mg_snprintf(path + strlen(path),
 		    sizeof(path) - strlen(path), "%s", file_name);
 	} else {
@@ -2676,16 +2720,19 @@ analyze_request(struct mg_connection *conn)
 	remove_double_dots(uri);
 	make_path(conn->ctx, uri, path, sizeof(path));
 
-	if ((cb = find_callback(conn->ctx, uri, -1)) != NULL) {
+#if !defined(NO_AUTH)
+	if (!check_authorization(conn, path)) {
+		send_authorization_request(conn);
+	} else
+#endif /* !NO_AUTH */
+	if ((cb = find_callback(conn->ctx, FALSE, uri, -1)) != NULL) {
 		if (strcmp(ri->request_method, "POST") ||
 		    (!strcmp(ri->request_method, "POST") &&
 		    handle_request_body(conn, -1)))
 			cb->func(conn, &conn->request_info, cb->user_data);
 	} else
 #if !defined(NO_AUTH)
-	if (!check_authorization(conn, path)) {
-		send_authorization_request(conn);
-	} else if (strstr(path, PASSWORDS_FILE_NAME)) {
+	if (strstr(path, PASSWORDS_FILE_NAME)) {
 		/* Do not allow to view passwords files */
 		send_error(conn, 403, "Forbidden", "");
 	} else if ((!strcmp(ri->request_method, "PUT") ||
@@ -3055,7 +3102,7 @@ admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
 
 	user_data = NULL; /* Unused */
 
-	(void) mg_printf(conn,
+	(void) mg_printf(conn, "%s",
 	    "HTTP/1.1 200 OK\r\n"
 	    "Content-Type: text/html\r\n\r\n"
 	    "<html><body><h1>Mongoose v. %s</h1>", mg_version());
@@ -3078,7 +3125,7 @@ admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
 
 	/* Print table with all options */
 	list = mg_get_option_list();
-	mg_printf(conn, "%s", "<table border=\"1\""
+	(void) mg_printf(conn, "%s", "<table border=\"1\""
 	    "<tr><th>Option</th><th>Description</th>"
 	    "<th colspan=2>Value</th></tr>");
 
