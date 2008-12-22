@@ -81,8 +81,8 @@ struct mg_option {
  *			Error code is passed as status_code in request info.
  * mg_protect_uri	Similar to "protect" option, but uses a user
  *			specified function instead of the passwords file.
- *			User specified function is passed user name, and must
- *			return 1 if user is authorized, and 0 if not.
+ *			User specified function is usual callback, which
+ *			does use its third argument to pass the result back.
  */
 
 struct mg_context *mg_start(void);
