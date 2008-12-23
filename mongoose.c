@@ -61,12 +61,12 @@
 #define	__func__		__FUNCTION__
 #define	ERRNO			GetLastError()
 #define	NO_SOCKLEN_T
-#define	SSL_LIB			L"ssleay32.dll"
+#define	SSL_LIB			"ssleay32.dll"
 #define	DIRSEP			'\\'
 #define	IS_DIRSEP_CHAR(c)	((c) == '/' || (c) == '\\')
 #define	O_NONBLOCK		0
 #define	EWOULDBLOCK		WSAEWOULDBLOCK
-#define	dlopen(x,y)		LoadLibraryW(x)
+#define	dlopen(x,y)		LoadLibrary(x)
 #define	dlsym(x,y)		GetProcAddress(x,y)
 #define	_POSIX_
 #define	R_OK			04 /* for _access() */
