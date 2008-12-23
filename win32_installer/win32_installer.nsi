@@ -24,7 +24,7 @@ Section "Mongoose files (required)"
 SectionEnd
 
 Section "SSL files"
-  File libssl32.dll
+  File ssleay32.dll
   File libeay32.dll
   File ssl_cert.pem
   FileOpen $0 mongoose.conf a
@@ -52,7 +52,7 @@ Section "Uninstall"
   ExecWait 'sc stop "${SVC}"'
   ExecWait 'sc delete "${SVC}"'
   Delete "$INSTDIR\*.*"
-  Delete "$SMPROGRAMS\mongoose\*.*"
-  RMDir "$SMPROGRAMS\mongoose"
+  Delete "$SMPROGRAMS\${MENUDIR}\*.*"
+  RMDir "$SMPROGRAMS\${MENUDIR}"
   RMDir "$INSTDIR"
 SectionEnd
