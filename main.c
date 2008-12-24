@@ -33,9 +33,12 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <winsvc.h>
 #define DIRSEP			'\\'
 #define	snprintf		_snprintf
+#if !defined(MINGW)
 #define	strdup(x)		_strdup(x)
+#endif /* !MINGW */
 #define	pause()			Sleep(INT_MAX)
 #else
 #include <sys/wait.h>
@@ -255,7 +258,6 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 #ifdef _WIN32
 static SERVICE_STATUS		ss; 
 static SERVICE_STATUS_HANDLE	hStatus; 
-static SERVICE_DESCRIPTION	service_descr = {"Web server"};
 static char			service_name[20];
 
 static void WINAPI
