@@ -41,7 +41,6 @@
 #include <stdio.h>
 
 #if defined(_WIN32)		/* Windows specific	*/
-
 #include <windows.h>
 
 #ifndef _WIN32_WCE
@@ -55,8 +54,14 @@
 /* WinCE has both Unicode and ANSI versions of GetProcAddress */
 #undef GetProcAddress
 #define GetProcAddress GetProcAddressA
-
 #endif /* _WIN32_WCE */
+
+/*
+ * Do not allow holes in data structures!
+ * This is needed so when Mongoose DLL is loaded, other languages that
+ * describe struct mg_request_info from mongoose.h, agree with C code.
+ */
+#pragma pack(1)
 
 #define	__func__		__FUNCTION__
 #define	ERRNO			GetLastError()
