@@ -67,9 +67,13 @@
 #define	O_NONBLOCK		0
 #define	EWOULDBLOCK		WSAEWOULDBLOCK
 #define	dlopen(x,y)		LoadLibrary(x)
-#define	dlsym(x,y)		GetProcAddress(x,y)
+#define	dlsym(x,y)		GetProcAddress((HINSTANCE) (x), (y))
 #define	_POSIX_
+
+#if !defined(R_OK)
 #define	R_OK			04 /* for _access() */
+#endif /* !R_OK  MINGW #defines R_OK */
+
 #define	SHUT_WR			1
 #define	snprintf		_snprintf
 #define	vsnprintf		_vsnprintf
@@ -77,13 +81,23 @@
 #define	pclose(x)		_pclose(x)
 #define	access(x, y)		_access(x, y)
 #define	getcwd(x, y)		_getcwd(x, y)
+
+#ifdef MINGW
+#define	strtoull(x, y, z)	strtoul(x, y, z)
+#else
 #define	strtoull(x, y, z)	_strtoui64(x, y, z)
+#endif /* MINGW */
+
 #define	write(x, y, z)		_write(x, y, (unsigned) z)
 #define	read(x, y, z)		_read(x, y, (unsigned) z)
 #define	open(x, y, z)		_open(x, y, z)
 #define	lseek(x, y, z)		_lseek(x, y, z)
 #define	close(x)		_close(x)
+
+#if !defined(fileno)
 #define	fileno(x)		_fileno(x)
+#endif /* !fileno MINGW #defines fileno */
+
 typedef HANDLE pthread_mutex_t;
 
 #ifdef __LCC__
