@@ -36,7 +36,7 @@
 #include <winsvc.h>
 #define DIRSEP			'\\'
 #define	snprintf		_snprintf
-#if !defined(MINGW)
+#if !defined(__LCC__)
 #define	strdup(x)		_strdup(x)
 #endif /* !MINGW */
 #define	pause()			Sleep(INT_MAX)
