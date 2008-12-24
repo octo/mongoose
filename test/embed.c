@@ -126,7 +126,7 @@ test_protect(struct mg_connection *conn, const struct mg_request_info *ri,
 
 	allowed = remote_user != NULL && !strcmp(allowed_user, remote_user);
 
-	* (void **) user_data = allowed ? (void *) 1 : NULL;
+	* (long *) user_data = allowed ? 1 : 0;
 }
 
 int main(void)
