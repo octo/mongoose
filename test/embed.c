@@ -26,6 +26,7 @@
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include "mongoose.h"
 
 #if !defined(LISTENING_PORT)
@@ -144,7 +145,7 @@ int main(void)
 	mg_bind_to_error_code(ctx, 404, &test_error, NULL);
 	mg_bind_to_error_code(ctx, 0, &test_error, NULL);
 
-	mg_protect_uri(ctx, "/foo/secret", &test_protect, "joe");
+	mg_protect_uri(ctx, "/foo/secret", &test_protect, (void *) "joe");
 
 	for (;;)
 		(void) getchar();
