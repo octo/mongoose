@@ -3128,7 +3128,7 @@ admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
 
 	user_data = NULL; /* Unused */
 
-	(void) mg_printf(conn, "%s",
+	(void) mg_printf(conn,
 	    "HTTP/1.1 200 OK\r\n"
 	    "Content-Type: text/html\r\n\r\n"
 	    "<html><body><h1>Mongoose v. %s</h1>", mg_version());
