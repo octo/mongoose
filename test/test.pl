@@ -143,7 +143,7 @@ kill_spawned_child();
 
 # Spawn the server on port $port
 my $cmd = "$exe -ports $port -access_log access.log -error_log debug.log ".
-		"-root test -aliases $alias";
+		"-root test -aliases $alias -admin_uri /hh";
 $cmd .= ' -cgi_interp perl' if on_windows();
 spawn($cmd);
 
@@ -155,6 +155,8 @@ o("GET /hello.txt HTTP/1.0\n\n", 'Content-Length: 17\s',
 	'GET regular file Content-Length');
 o("GET /%68%65%6c%6c%6f%2e%74%78%74 HTTP/1.0\n\n",
 	'HTTP/1.1 200 OK', 'URL-decoding');
+
+o("GET /hh HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'GET admin URI');
 
 # Test HTTP version parsing
 o("GET / HTTPX/1.0\r\n\r\n", '400 Bad Request', 'Bad HTTP Version', 0);
