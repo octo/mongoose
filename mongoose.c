@@ -276,11 +276,11 @@ struct listener {
  * Callback function, and where it is bound to
  */
 struct callback {
-	const char		*uri_regex;	/* URI regex to handle	*/
-	mg_callback_t		func;		/* user callback	*/
-	bool_t			is_auth;	/* func is auth checker	*/
-	int			status_code;	/* error code to handle	*/
-	void			*user_data;	/* opaque user data	*/
+	char		*uri_regex;	/* URI regex to handle		*/
+	mg_callback_t	func;		/* user callback		*/
+	bool_t		is_auth;	/* func is auth checker		*/
+	int		status_code;	/* error code to handle		*/
+	void		*user_data;	/* opaque user data		*/
 };
 
 /*
@@ -2175,14 +2175,17 @@ static void
 mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
 		mg_callback_t func, bool_t is_auth, void *user_data)
 {
+	struct callback	*cb;
+
 	if (ctx->num_callbacks >= (int) ARRAY_SIZE(ctx->callbacks) - 1) {
 		cry("Too many callbacks! Increase MAX_CALLBACKS.");
 	} else {
-		ctx->callbacks[ctx->num_callbacks].uri_regex = uri_regex;
-		ctx->callbacks[ctx->num_callbacks].func = func;
-		ctx->callbacks[ctx->num_callbacks].is_auth = is_auth;
-		ctx->callbacks[ctx->num_callbacks].status_code = status_code;
-		ctx->callbacks[ctx->num_callbacks].user_data = user_data;
+		cb = &ctx->callbacks[ctx->num_callbacks];
+		cb->uri_regex = uri_regex ? mg_strdup(uri_regex) : NULL;
+		cb->func = func;
+		cb->is_auth = is_auth;
+		cb->status_code = status_code;
+		cb->user_data = user_data;
 		ctx->num_callbacks++;
 	}
 }
@@ -2964,6 +2967,10 @@ mg_fini(struct mg_context *ctx)
 	int	i;
 
 	close_all_listening_sockets(ctx);
+
+	for (i = 0; i < ctx->num_callbacks; i++)
+		if (ctx->callbacks[i].uri_regex != NULL)
+			free(ctx->callbacks[i].uri_regex);
 
 	for (i = 0; i < NUM_OPTIONS; i++)
 		if (ctx->options[i] != NULL)
