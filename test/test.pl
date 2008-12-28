@@ -218,6 +218,7 @@ o($range_request, '\nple$', 'Range: body content');
 
 unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 	o("GET /env.cgi HTTP/1.0\n\r\n", 'HTTP/1.1 200 OK', 'GET CGI file');
+	o("GET /sh.cgi HTTP/1.0\n\r\n", 'shell script CGI', 'GET sh CGI file');
 	o("GET /env.cgi?var=HELLO HTTP/1.0\n\n", 'QUERY_STRING=var=HELLO',
 		'QUERY_STRING wrong');
 	o("POST /env.cgi HTTP/1.0\r\nContent-Length: 9\r\n\r\nvar=HELLO",

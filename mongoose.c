@@ -928,7 +928,7 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 			/* Execute CGI program */
 			interp = conn->ctx->options[OPT_CGI_INTERPRETER];
 			if (interp == NULL) {
-				(void) execle("./env.cgi", prog, NULL, envp);
+				(void) execle(prog, prog, NULL, envp);
 				cry("execle(%s): %s", prog, strerror(ERRNO));
 			} else {
 				(void) execle(interp, interp, prog, NULL, envp);
