@@ -825,10 +825,6 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	fix_directory_separators(line);
 	fix_directory_separators(cmdline);
 
-	/*
-	 * Spawn reader & writer threads before we create CGI process.
-	 * Otherwise CGI process may die too quickly, loosing the data
-	 */
 	if (CreateProcessA(NULL, cmdline, NULL, NULL, TRUE,
 	    CREATE_NEW_PROCESS_GROUP, envblk, line, &si, &pi) == 0) {
 		cry("%s: CreateProcess(%s): %d", __func__, cmdline, ERRNO);
