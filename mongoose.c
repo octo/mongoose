@@ -1053,9 +1053,13 @@ get_content_length(const struct mg_connection *conn)
 /*
  * URL-decode input buffer into destination buffer.
  * 0-terminate the destination buffer. Return the length of decoded data.
+ * form-url-encoded data differs from URI encoding in a way that it
+ * uses '+' as character for space, see RFC 1866 section 8.2.1
+ * http://ftp.ics.uci.edu/pub/ietf/html/rfc1866.txt
  */
 static size_t
-url_decode(const char *src, size_t src_len, char *dst, size_t dst_len)
+url_decode(const char *src, size_t src_len, char *dst, size_t dst_len,
+		bool_t is_form_url_encoded)
 {
 	size_t	i, j;
 	int	a, b;
@@ -1069,6 +1073,8 @@ url_decode(const char *src, size_t src_len, char *dst, size_t dst_len)
 			b = tolower(* (unsigned char *) (src + i + 2));
 			dst[j] = ((HEXTOI(a) << 4) | HEXTOI(b)) & 0xff;
 			i += 2;
+		} else if (is_form_url_encoded && src[i] == '+') {
+			dst[j] = ' ';
 		} else {
 			dst[j] = src[i];
 		}
@@ -1088,7 +1094,7 @@ get_var(const char *name, const char *buf, size_t buf_len)
 {
 	const char	*p, *e, *s;
 	char		tmp[BUFSIZ];
-	size_t		var_len, value_len;
+	size_t		var_len;
 
 	var_len = strlen(name);
 	e = buf + buf_len;
@@ -1107,7 +1113,7 @@ get_var(const char *name, const char *buf, size_t buf_len)
 				s = e;
 
 			/* URL-decode value. Return result length */
-			value_len = url_decode(p, s - p, tmp, sizeof(tmp));
+			(void) url_decode(p, s - p, tmp, sizeof(tmp), TRUE);
 			return (mg_strdup(tmp));
 		}
 
@@ -2729,7 +2735,7 @@ analyze_request(struct mg_connection *conn)
 	if ((conn->request_info.query_string = strchr(uri, '?')) != NULL)
 		* conn->request_info.query_string++ = '\0';
 
-	(void) url_decode(uri, (int) strlen(uri), uri, strlen(uri) + 1);
+	(void) url_decode(uri, (int) strlen(uri), uri, strlen(uri) + 1, FALSE);
 	remove_double_dots(uri);
 	make_path(conn->ctx, uri, path, sizeof(path));
 

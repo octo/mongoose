@@ -23,7 +23,7 @@ my $embed_exe = '.' . $dir_separator . 'embed';
 my $exit_code = 0;
 
 my @files_to_delete = ('debug.log', 'access.log', $config, "$root/put.txt",
-	"$test_dir/index.html", "$test_dir/env.cgi",
+	"$test_dir/index.html", "$test_dir/env.cgi", "$root/a+.txt",
 	"$root/binary_file", $embed_exe);
 
 END {
@@ -155,6 +155,10 @@ o("GET /hello.txt HTTP/1.0\n\n", 'Content-Length: 17\s',
 	'GET regular file Content-Length');
 o("GET /%68%65%6c%6c%6f%2e%74%78%74 HTTP/1.0\n\n",
 	'HTTP/1.1 200 OK', 'URL-decoding');
+
+# '+' in URI must not be URL-decoded to space
+open FD, ">$root/a+.txt"; close FD;
+o("GET /a+.txt HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'URL-decoding, + in URI');
 
 o("GET /hh HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'GET admin URI');
 
@@ -336,6 +340,12 @@ sub do_embedded_test {
 		"a=b&my_var=foo&c=d", 'Value: \[foo\]', 'mg_get_var 5', 0);
 	o("POST /test_get_var HTTP/1.0\nContent-Length: 14\n\n".
 		"a=b&my_var=foo", 'Value: \[foo\]', 'mg_get_var 6', 0);
+
+	# + in form data MUST be decoded to space	
+	o("POST /test_get_var HTTP/1.0\nContent-Length: 10\n\n".
+		"my_var=b+c", 'Value: \[b c\]', 'mg_get_var 7', 0);
+	
+		
 	o("POST /test_get_request_info?xx=yy HTTP/1.0\nFoo: bar\n".
 		"Content-Length: 3\n\na=b",
 		'Method: \[POST\].URI: \[/test_get_request_info\].'.
