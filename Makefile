@@ -45,6 +45,19 @@ winexe:
 	cl $(WINOPT) $(SRCS) /link /incremental:no \
 		/out:$(PROG).exe ws2_32.lib advapi32.lib
 
+# Build for Windows under MinGW
+#MINGWDBG= -DDEBUG -O0
+MINGWDBG= -DNDEBUG -Os
+MINGWOPT= -W -Wall -mthreads -Wl,--subsystem,console -DMINGW $(MINGWDBG)
+
+mingw: mingwexe mingwdll
+mingwdll:
+	gcc $(MINGWOPT) mongoose.c -lws2_32 \
+		-shared -Wl,--out-implib=$(PROG).lib -o $(PROG).dll
+
+mingwexe:
+	gcc $(MINGWOPT) $(SRCS) -lws2_32 -ladvapi32 -o $(PROG).exe 
+
 man:
 	cat mongoose.1 | tbl | groff -man -Tascii | col -b > mongoose.1.txt
 	cat mongoose.1 | tbl | groff -man -Tascii | less
