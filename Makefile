@@ -38,8 +38,8 @@ WINOPT=	/MT /TC $(WINDBG) /nologo /DNDEBUG /W4 /D_CRT_SECURE_NO_WARNINGS
 windows: winexe windll
 
 windll:
-	cl $(WINOPT) mongoose.c /link /incremental:no /DLL /DEF:dll.def \
-		/out:$(PROG).dll ws2_32.lib
+	cl $(WINOPT) mongoose.c /link /incremental:no /DLL \
+		/DEF:win32_installer\dll.def /out:$(PROG).dll ws2_32.lib
 
 winexe:
 	cl $(WINOPT) $(SRCS) /link /incremental:no \
