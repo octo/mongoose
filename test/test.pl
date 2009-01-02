@@ -24,7 +24,7 @@ my $exit_code = 0;
 
 my @files_to_delete = ('debug.log', 'access.log', $config, "$root/put.txt",
 	"$test_dir/index.html", "$test_dir/env.cgi", "$root/a+.txt",
-	"$root/binary_file", $embed_exe);
+	"$root/.htpasswd", "$root/binary_file", $embed_exe);
 
 END {
 	unlink @files_to_delete;
@@ -183,7 +183,6 @@ o("GET /hello.txt HTTP/1.1\n\nGET /hello.txt HTTP/1.0\n\n",
 	'HTTP/1.1 200.+keep-alive.+HTTP/1.1 200.+close',
 	'Request pipelining', 2);
 
-
 my $mime_types = {
 	html => 'text/html',
 	htm => 'text/html',
@@ -223,6 +222,14 @@ o($range_request, 'Content-Range: bytes 3-5', 'Range: Content-Range');
 o($range_request, '\nple$', 'Range: body content');
 
 unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
+	# Check that .htpasswd file existence trigger authorization
+	open FD, ">$root/.htpasswd"; close FD;
+	o("GET /hello.txt HTTP/1.1\n\n", '401 Unauthorized',
+		'.htpasswd - triggering auth on file request');
+	o("GET / HTTP/1.1\n\n", '401 Unauthorized',
+		'.htpasswd - triggering auth on directory request');
+	unlink "$root/.htpasswd";
+
 	o("GET /env.cgi HTTP/1.0\n\r\n", 'HTTP/1.1 200 OK', 'GET CGI file');
 	o("GET /sh.cgi HTTP/1.0\n\r\n", 'shell script CGI', 'GET sh CGI file');
 	o("GET /env.cgi?var=HELLO HTTP/1.0\n\n", 'QUERY_STRING=var=HELLO',

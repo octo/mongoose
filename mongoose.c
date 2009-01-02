@@ -1696,6 +1696,7 @@ open_auth_file(struct mg_context *ctx, const char *path)
 {
 	char 		name[FILENAME_MAX];
 	const char	*p, *e;
+	struct stat	st;
 	FILE		*fp;
 
 	if (ctx->options[OPT_AUTH_GPASSWD] != NULL) {
@@ -1703,6 +1704,10 @@ open_auth_file(struct mg_context *ctx, const char *path)
 		if ((fp = fopen(ctx->options[OPT_AUTH_GPASSWD], "r")) == NULL)
 			cry("fopen(%s): %s",
 			    ctx->options[OPT_AUTH_GPASSWD], strerror(ERRNO));
+	} else if (!mg_stat(path, &st) && S_ISDIR(st.st_mode)) {
+		(void) mg_snprintf(name, sizeof(name), "%s%c%s",
+		    path, DIRSEP, PASSWORDS_FILE_NAME);
+		fp = fopen(name, "r");
 	} else {
 		/*
 		 * Try to find .htpasswd in requested directory.
@@ -1720,8 +1725,8 @@ open_auth_file(struct mg_context *ctx, const char *path)
 		 * Make up the path by concatenating directory name and
 		 * .htpasswd file name.
 		 */
-		(void) mg_snprintf(name, sizeof(name), "%.*s/%s",
-		    (int) (e - p), p, PASSWORDS_FILE_NAME);
+		(void) mg_snprintf(name, sizeof(name), "%.*s%c%s",
+		    (int) (e - p), p, DIRSEP, PASSWORDS_FILE_NAME);
 		fp = fopen(name, "r");
 	}
 
@@ -1876,7 +1881,7 @@ check_authorization(struct mg_connection *conn, const char *path)
 		authorized = FALSE;
 		if (parse_auth_header(conn, buf, sizeof(buf), &ah)) {
 			cb->func(conn, &conn->request_info, &user_data);
-			authorized = (bool_t) user_data;
+			authorized = (bool_t) (long) user_data;
 		}
 	}
 
