@@ -13,7 +13,7 @@ COPT=	-W -Wall -std=c99 -pedantic -Os -s -D_POSIX_SOURCE -D_BSD_SOURCE
 # -DNO_SSI		- disable SSI support (-4kb)
 
 all:
-	@echo "make (linux|bsd|windows|rtems)"
+	@echo "make (linux|bsd|windows|mingw|rtems)"
 
 linux:
 	$(CC) $(COPT) $(CFLAGS) $(SRCS) -ldl -lpthread -o $(PROG)
