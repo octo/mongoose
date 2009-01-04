@@ -820,7 +820,7 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		    line + 2, line[2] == '\0' ? "" : " ", prog);
 	}
 
-	if ((p = strrchr(prog, '/')) != NULL)
+	if ((p = (char *) strrchr(prog, '/')) != NULL)
 		prog = p + 1;
 
 	(void) mg_snprintf(cmdline, sizeof(cmdline), "%s %s", interp, prog);
@@ -1967,7 +1967,7 @@ print_dir_entry(struct de *de)
 static int
 compare_dir_entries(const void *p1, const void *p2)
 {
-	const struct de	*a = p1, *b = p2;
+	const struct de	*a = (struct de *) p1, *b = (struct de *) p2;
 	const char	*q = a->conn->request_info.query_string;
 	int		cmp_result = 0;
 
@@ -2017,7 +2017,8 @@ send_directory(struct mg_connection *conn, const char *dir)
 
 		if (entries == NULL || num_entries >= arr_size) {
 			arr_size *= 2;
-			entries = realloc(entries, arr_size * sizeof(entries[0]));
+			entries = (struct de *) realloc(entries,
+			    arr_size * sizeof(entries[0]));
 		}
 		
 		if (entries == NULL) {
@@ -2034,9 +2035,11 @@ send_directory(struct mg_connection *conn, const char *dir)
 		entries[num_entries].file_name = mg_strdup(dp->d_name);
 		num_entries++;
 	}
+	(void) closedir(dirp);
 
 	if (conn->request_info.query_string != NULL)
-		qsort(entries, num_entries, sizeof(entries[0]), compare_dir_entries);
+		qsort(entries, num_entries,
+		    sizeof(entries[0]), compare_dir_entries);
 
 	conn->num_bytes_sent += mg_printf(conn,
 	    "<html><head><title>Index of %s</title>"
@@ -2842,7 +2845,7 @@ analyze_request(struct mg_connection *conn)
 	} else if (!strcmp(ri->request_method, "PUT")) {
 		put_file(conn, path);
 	} else if (!strcmp(ri->request_method, "DELETE")) {
-		if (remove(path) == 0)
+		if (mg_remove(path) == 0)
 			send_error(conn, 200, "OK", "");
 		else
 			send_error(conn, 500, http_500_error,
@@ -3059,6 +3062,7 @@ mg_fini(struct mg_context *ctx)
 		(void) fclose(ctx->error_log);
 
 	/* TODO: free SSL context */
+	(void) pthread_mutex_destroy(&ctx->mutex);
 
 	free(ctx);
 }
