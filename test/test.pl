@@ -3,6 +3,7 @@
 # $Id$
 
 use IO::Socket;
+use File::Path;
 use strict;
 use warnings;
 #use diagnostics;
@@ -23,13 +24,12 @@ my $embed_exe = '.' . $dir_separator . 'embed';
 my $exit_code = 0;
 
 my @files_to_delete = ('debug.log', 'access.log', $config, "$root/put.txt",
-	"$test_dir/index.html", "$test_dir/env.cgi", "$root/a+.txt",
-	"$root/.htpasswd", "$root/binary_file", $embed_exe);
+	"$root/a+.txt", "$root/.htpasswd", "$root/binary_file", $embed_exe);
 
 END {
 	unlink @files_to_delete;
-	rmdir $test_dir;
 	kill_spawned_child();
+	File::Path::rmtree($test_dir);
 	exit $exit_code;
 }
 
@@ -100,6 +100,13 @@ sub spawn {
 	sleep 1;
 }
 
+sub write_file {
+	open FD, ">$_[0]" or fail "Cannot open $_[0]: $!";
+	binmode FD;
+	print FD $_[1];
+	close FD;
+}
+
 sub read_file {
 	open FD, $_[0] or fail "Cannot open $_[0]: $!";
 	my @lines = <FD>;
@@ -130,9 +137,7 @@ if ($^O =~ /darwin|bsd|linux/) {
 }
 
 # Make sure we load config file if no options are given
-open FD, ">$config";
-print FD "ports 12345\naccess_log access.log\n";
-close FD;
+write_file($config, "ports 12345\naccess_log access.log\n");
 spawn($exe);
 my $saved_port = $port;
 $port = 12345;
@@ -157,7 +162,7 @@ o("GET /%68%65%6c%6c%6f%2e%74%78%74 HTTP/1.0\n\n",
 	'HTTP/1.1 200 OK', 'URL-decoding');
 
 # '+' in URI must not be URL-decoded to space
-open FD, ">$root/a+.txt"; close FD;
+write_file("$root/a+.txt", '');
 o("GET /a+.txt HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'URL-decoding, + in URI');
 
 o("GET /hh HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'GET admin URI');
@@ -174,7 +179,7 @@ o("GET /$test_dir_uri/not_exist HTTP/1.0\n\n",
 	'HTTP/1.1 404', 'PATH_INFO loop problem');
 o("GET /$test_dir_uri HTTP/1.0\n\n", 'HTTP/1.1 301', 'Directory redirection');
 o("GET /$test_dir_uri/ HTTP/1.0\n\n", 'Modified', 'Directory listing');
-open FD, ">$test_dir/index.html"; print FD "tralala"; close FD;
+write_file("$test_dir/index.html", "tralala");
 o("GET /$test_dir_uri/ HTTP/1.0\n\n", 'tralala', 'Index substitution');
 o("GET / HTTP/1.0\n\n", 'embed.c', 'Directory listing - file name');
 o("GET /ta/ HTTP/1.0\n\n", 'Modified', 'Aliases');
@@ -195,8 +200,7 @@ my $mime_types = {
 
 foreach my $key (keys %$mime_types) {
 	my $filename = "_mime_file_test.$key";
-	open FD, ">$root/$filename";
-	close FD; 
+	write_file("$root/$filename", '');
 	o("GET /$filename HTTP/1.0\n\n",
 		"Content-Type: $mime_types->{$key}", ".$key mime type");
 	unlink "$root/$filename";
@@ -206,10 +210,7 @@ foreach my $key (keys %$mime_types) {
 my $binary_file = 'binary_file';
 my $f2 = ''; 
 foreach (0..123456) { $f2 .= chr(int(rand() * 255)); }
-open FD, ">$root/$binary_file";
-binmode FD;
-print FD $f2;
-close FD;
+write_file("$root/$binary_file", $f2);
 my $f1 = req("GET /$binary_file HTTP/1.0\r\n\n");
 while ($f1 =~ /^.*\r\n/) { $f1 =~ s/^.*\r\n// }
 $f1 eq $f2 or fail("Integrity check for downloaded binary file");
@@ -221,9 +222,39 @@ o($range_request, 'Content-Length: 3\s', 'Range: Content-Length');
 o($range_request, 'Content-Range: bytes 3-5', 'Range: Content-Range');
 o($range_request, '\nple$', 'Range: body content');
 
+# Test directory sorting. Sleep between file creation for 1.1 seconds,
+# to make sure modification time are different.
+mkdir "$test_dir/sort";
+write_file("$test_dir/sort/11", 'xx');
+select undef, undef, undef, 1.1;
+write_file("$test_dir/sort/aa", 'xxxx');
+select undef, undef, undef, 1.1;
+write_file("$test_dir/sort/bb", 'xxx');
+select undef, undef, undef, 1.1;
+write_file("$test_dir/sort/22", 'x');
+
+o("GET /$test_dir_uri/sort/?n HTTP/1.0\n\n",
+	'200 OK.+>11<.+>22<.+>aa<.+>bb<',
+	'Directory listing (name, ascending)');
+o("GET /$test_dir_uri/sort/?nd HTTP/1.0\n\n",
+	'200 OK.+>bb<.+>aa<.+>22<.+>11<',
+	'Directory listing (name, descending)');
+o("GET /$test_dir_uri/sort/?s HTTP/1.0\n\n",
+	'200 OK.+>22<.+>11<.+>bb<.+>aa<',
+	'Directory listing (size, ascending)');
+o("GET /$test_dir_uri/sort/?sd HTTP/1.0\n\n",
+	'200 OK.+>aa<.+>bb<.+>11<.+>22<',
+	'Directory listing (size, descending)');
+o("GET /$test_dir_uri/sort/?d HTTP/1.0\n\n",
+	'200 OK.+>11<.+>aa<.+>bb<.+>22<',
+	'Directory listing (modification time, ascending)');
+o("GET /$test_dir_uri/sort/?dd HTTP/1.0\n\n",
+	'200 OK.+>22<.+>bb<.+>aa<.+>11<',
+	'Directory listing (modification time, descending)');
+
 unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 	# Check that .htpasswd file existence trigger authorization
-	open FD, ">$root/.htpasswd"; close FD;
+	write_file("$root/.htpasswd", '');
 	o("GET /hello.txt HTTP/1.1\n\n", '401 Unauthorized',
 		'.htpasswd - triggering auth on file request');
 	o("GET / HTTP/1.1\n\n", '401 Unauthorized',
@@ -231,7 +262,8 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 	unlink "$root/.htpasswd";
 
 	o("GET /env.cgi HTTP/1.0\n\r\n", 'HTTP/1.1 200 OK', 'GET CGI file');
-	o("GET /sh.cgi HTTP/1.0\n\r\n", 'shell script CGI', 'GET sh CGI file');
+	o("GET /sh.cgi HTTP/1.0\n\r\n", 'shell script CGI',
+			'GET sh CGI file') unless on_windows();
 	o("GET /env.cgi?var=HELLO HTTP/1.0\n\n", 'QUERY_STRING=var=HELLO',
 		'QUERY_STRING wrong');
 	o("POST /env.cgi HTTP/1.0\r\nContent-Length: 9\r\n\r\nvar=HELLO",
@@ -281,10 +313,7 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 		or fail("Cannot add user in a passwd file");
 	system("$exe -A $path a b c2") == 0
 		or fail("Cannot edit user in a passwd file");
-	my $content = '';
-	open FD, $path or fail("Cannot open passwd file: $!"); 
-	$content .= $_ while (<FD>);
-	close FD;
+	my $content = read_file($path);
 	$content =~ /^b:a:\w+$/gs or fail("Bad content of the passwd file");
 	unlink $path;
 
