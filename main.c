@@ -56,15 +56,14 @@ static struct mg_context *ctx;		/* Mongoose context		*/
 static void
 signal_handler(int sig_num)
 {
-	switch (sig_num) {
-#ifndef _WIN32
-	case SIGCHLD:
-		while (waitpid(-1, &sig_num, WNOHANG) > 0) ;
-		break;
+#if !defined(_WIN32)
+	if (sig_num == SIGCHLD) {
+		do {
+		} while (waitpid(-1, &sig_num, WNOHANG) > 0);
+	} else 
 #endif /* !_WIN32 */
-	default:
+	{
 		exit_flag = sig_num;
-		break;
 	}
 }
 
