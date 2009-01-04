@@ -49,8 +49,7 @@ winexe:
 # Build for Windows under MinGW
 #MINGWDBG= -DDEBUG -O0
 MINGWDBG= -DNDEBUG -Os
-MINGWOPT= -W -Wall -mthreads -Wl,--subsystem,console -DHAVE_STDINT \
-	  $(MINGWDBG) -DHAVE_STDINT
+MINGWOPT= -W -Wall -mthreads -Wl,--subsystem,console $(MINGWDBG) -DHAVE_STDINT
 
 mingw: mingwexe mingwdll
 mingwdll:
