@@ -1974,9 +1974,11 @@ compare_dir_entries(const void *p1, const void *p2)
 	if (*q == 'n') {
 		cmp_result = strcmp(a->file_name, b->file_name);
 	} else if (*q == 's') {
-		cmp_result = a->st.st_size - b->st.st_size;
+		cmp_result = a->st.st_size == b->st.st_size ? 0 :
+			a->st.st_size > b->st.st_size ? 1 : -1;
 	} else if (*q == 'd') {
-		cmp_result = (int) (a->st.st_mtime >= b->st.st_mtime);
+		cmp_result = a->st.st_mtime == b->st.st_mtime ? 0 :
+			a->st.st_mtime > b->st.st_mtime ? 1 : -1;
 	}
 
 	return (q[1] == 'd' ? -cmp_result : cmp_result);
@@ -2024,11 +2026,12 @@ send_directory(struct mg_connection *conn, const char *dir)
 			return;
 		}
 
-		(void) mg_snprintf(path, sizeof(path), "%s%c%s", dir, DIRSEP, dp->d_name);
+		(void) mg_snprintf(path, sizeof(path), "%s%c%s",
+		    dir, DIRSEP, dp->d_name);
 		
 		(void) stat(path, &entries[num_entries].st);
 		entries[num_entries].conn = conn;
-		entries[num_entries].file_name = dp->d_name;
+		entries[num_entries].file_name = mg_strdup(dp->d_name);
 		num_entries++;
 	}
 
@@ -2050,10 +2053,12 @@ send_directory(struct mg_connection *conn, const char *dir)
 	conn->num_bytes_sent += mg_printf(conn,
 	    "<tr><td><a href=\"%s%s\">%s</a></td>"
 	    "<td>&nbsp;%s</td><td>&nbsp;&nbsp;%s</td></tr>\n",
-	    conn->request_info.uri, "..", "&uarr; Parent directory", "-", "-");	
+	    conn->request_info.uri, "..", "Parent directory", "-", "-");	
 
-	for (i = 0; i < num_entries; i++)
+	for (i = 0; i < num_entries; i++) {
 		print_dir_entry(&entries[i]);
+		free(entries[i].file_name);
+	}
 	free(entries);
 
 	conn->num_bytes_sent += mg_printf(conn, "%s", "</table></body></html>");
