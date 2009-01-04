@@ -1925,15 +1925,74 @@ does_client_want_keep_alive(const struct mg_connection *conn)
 	    !mg_strcasecmp(value, "keep-alive")));
 }
 
-static void
-send_directory(struct mg_connection *conn, const char *path)
-{
-	struct dirent	*dp = NULL;
-	DIR		*dirp;
-	char		size[64], mod[64], fname[FILENAME_MAX];
-	struct stat	st;
+struct de {
+	struct mg_connection	*conn;
+	char			*file_name;
+	struct stat		st;
+};
 
-	if ((dirp = opendir(path)) == NULL) {
+static void
+print_dir_entry(struct de *de)
+{
+	char		size[64], mod[64];
+
+	if (S_ISDIR(de->st.st_mode)) {
+		(void) mg_snprintf(size, sizeof(size), "%s", "&lt;DIR&gt;");
+	} else {
+		if (de->st.st_size < 1024)
+			(void) mg_snprintf(size, sizeof(size),
+			    "%lu", (unsigned long) de->st.st_size);
+		else if (de->st.st_size < 1024 * 1024)
+			(void) mg_snprintf(size, sizeof(size),
+			    "%.1fk", (double) de->st.st_size / 1024);
+		else if (de->st.st_size < 1024 * 1024 * 1024)
+			(void) mg_snprintf(size, sizeof(size),
+			    "%.1fM", (double) de->st.st_size / 1048576);
+		else
+			(void) mg_snprintf(size, sizeof(size),
+			    "%.1fG", (double) de->st.st_size / 1073741824);
+	}
+	(void) strftime(mod, sizeof(mod), "%d-%b-%Y %H:%M",
+		localtime(&de->st.st_mtime));
+	de->conn->num_bytes_sent += mg_printf(de->conn,
+	    "<tr><td><a href=\"%s%s\">%s%s</a></td>"
+	    "<td>&nbsp;%s</td><td>&nbsp;&nbsp;%s</td></tr>\n",
+	    de->conn->request_info.uri, de->file_name, de->file_name,
+	    S_ISDIR(de->st.st_mode) ? "/" : "", mod, size);
+}
+
+static int
+compare_dir_entries(const void *p1, const void *p2)
+{
+	const struct de	*a = p1, *b = p2;
+	const char	*q = a->conn->request_info.query_string;
+	int		cmp_result = 0;
+
+	if (!strcmp(a->file_name, "..")) {
+		return (-1);
+	} else if (!strcmp(b->file_name, "..")) {
+		return (1);
+	} else if (*q == 'n') {
+		cmp_result = strcmp(a->file_name, b->file_name);
+	} else if (*q == 's') {
+		cmp_result = a->st.st_size - b->st.st_size;
+	} else if (*q == 'd') {
+		cmp_result = a->st.st_mtime - b->st.st_mtime;
+	}
+
+	return (q[1] == 'd' ? -cmp_result : cmp_result);
+}
+
+static void
+send_directory(struct mg_connection *conn, const char *dir)
+{
+	struct dirent	*dp;
+	DIR		*dirp;
+	struct de	*entries = NULL;
+	char		path[FILENAME_MAX], sort_direction;
+	int		i, num_entries = 0, arr_size = 128;
+
+	if ((dirp = opendir(dir)) == NULL) {
 		send_error(conn, 500, "Cannot open directory",
 		    "Error: opendir(%s): %s", path, strerror(ERRNO));
 		return;
@@ -1943,48 +2002,60 @@ send_directory(struct mg_connection *conn, const char *path)
 	    "HTTP/1.1 200 OK\r\n"
 	    "Connection: close\r\n"
 	    "Content-Type: text/html; charset=utf-8\r\n\r\n");
-
-	conn->num_bytes_sent += mg_printf(conn,
-	    "<html><head><title>Index of %s</title>"
-	    "<style>th {text-align: left;}</style></head>"
-	    "<body><h1>Index of %s</h1><pre><table cellpadding=\"0\">"
-	    "<tr><th>Name</th><th>Modified</th><th>Size</th></tr>"
-	    "<tr><td colspan=\"3\"><hr></td></tr>",
-	    conn->request_info.uri, conn->request_info.uri);
+	
+	sort_direction = conn->request_info.query_string != NULL &&
+	    conn->request_info.query_string[1] == 'd' ? 'a' : 'd';
 
 	while ((dp = readdir(dirp)) != NULL) {
 
 		/* Do not show current dir and passwords file */
 		if (!strcmp(dp->d_name, ".") ||
+		    !strcmp(dp->d_name, "..") ||
 		    !strcmp(dp->d_name, PASSWORDS_FILE_NAME))
 			continue;
 
-		(void) mg_snprintf(fname, sizeof(fname), "%s%c%s",
-		    path, DIRSEP, dp->d_name);
-		(void) stat(fname, &st);
-
-		if (S_ISDIR(st.st_mode)) {
-			(void) mg_snprintf(size, sizeof(size), "%s",
-			    "&lt;DIR&gt;");
-		} else {
-			if (st.st_size < 1024)
-				(void) mg_snprintf(size, sizeof(size),
-				    "%lu", (unsigned long) st.st_size);
-			else if (st.st_size < 1024 * 1024)
-				(void) mg_snprintf(size, sizeof(size),
-				    "%.1fk", (double) st.st_size / 1024);
-			else
-				(void) mg_snprintf(size, sizeof(size),
-				    "%.1fM", (double) st.st_size / 1048576);
+		if (entries == NULL || num_entries >= arr_size) {
+			arr_size *= 2;
+			entries = realloc(entries, arr_size * sizeof(entries[0]));
 		}
-		(void) strftime(mod, sizeof(mod), "%d-%b-%Y %H:%M",
-			localtime(&st.st_mtime));
-		conn->num_bytes_sent += mg_printf(conn,
-		    "<tr><td><a href=\"%s%s\">%s%s</a></td>"
-		    "<td>&nbsp;%s</td><td>&nbsp;&nbsp;%s</td></tr>\n",
-		    conn->request_info.uri, dp->d_name, dp->d_name,
-		    S_ISDIR(st.st_mode) ? "/" : "", mod, size);
+		
+		if (entries == NULL) {
+			send_error(conn, 500, "Cannot open directory",
+			    "%s", "Error: cannot allocate memory");
+			return;
+		}
+
+		(void) mg_snprintf(path, sizeof(path), "%s%c%s", dir, DIRSEP, dp->d_name);
+		
+		(void) stat(path, &entries[num_entries].st);
+		entries[num_entries].conn = conn;
+		entries[num_entries].file_name = dp->d_name;
+		num_entries++;
 	}
+
+	if (conn->request_info.query_string != NULL)
+		qsort(entries, num_entries, sizeof(entries[0]), compare_dir_entries);
+
+	conn->num_bytes_sent += mg_printf(conn,
+	    "<html><head><title>Index of %s</title>"
+	    "<style>th {text-align: left;}</style></head>"
+	    "<body><h1>Index of %s</h1><pre><table cellpadding=\"0\">"
+	    "<tr><th><a href=\"?n%c\">Name</a></th>"
+	    "<th><a href=\"?d%c\">Modified</a></th>"
+	    "<th><a href=\"?s%c\">Size</a></th></tr>"
+	    "<tr><td colspan=\"3\"><hr></td></tr>",
+	    conn->request_info.uri, conn->request_info.uri,
+	    sort_direction, sort_direction, sort_direction);
+	
+	/* Print first entry - link to a parent directory */
+	conn->num_bytes_sent += mg_printf(conn,
+	    "<tr><td><a href=\"%s%s\">%s</a></td>"
+	    "<td>&nbsp;%s</td><td>&nbsp;&nbsp;%s</td></tr>\n",
+	    conn->request_info.uri, "..", "&uarr; Parent directory", "-", "-");	
+
+	for (i = 0; i < num_entries; i++)
+		print_dir_entry(&entries[i]);
+	free(entries);
 
 	conn->num_bytes_sent += mg_printf(conn, "%s", "</table></body></html>");
 	conn->request_info.status_code = 200;
