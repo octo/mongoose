@@ -34,7 +34,8 @@ rtems:
 
 #WINDBG=	/Zi /DDEBUG /Od
 WINDBG=	/DNDEBUG /Os
-WINOPT=	/MT /TC $(WINDBG) /nologo /DNDEBUG /W4 /D_CRT_SECURE_NO_WARNINGS
+WINOPT=	/MT /TC $(WINDBG) /nologo /DNDEBUG /W4 \
+	/D_CRT_SECURE_NO_WARNINGS /DHAVE_STRTOUI64
 windows: winexe windll
 
 windll:
@@ -48,7 +49,8 @@ winexe:
 # Build for Windows under MinGW
 #MINGWDBG= -DDEBUG -O0
 MINGWDBG= -DNDEBUG -Os
-MINGWOPT= -W -Wall -mthreads -Wl,--subsystem,console -DMINGW $(MINGWDBG)
+MINGWOPT= -W -Wall -mthreads -Wl,--subsystem,console -DHAVE_STDINT \
+	  $(MINGWDBG) -DHAVE_STDINT
 
 mingw: mingwexe mingwdll
 mingwdll:

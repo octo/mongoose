@@ -87,11 +87,11 @@
 #define	access(x, y)		_access(x, y)
 #define	getcwd(x, y)		_getcwd(x, y)
 
-#ifdef MINGW
-#define	strtoull(x, y, z)	strtoul(x, y, z)
-#else
+#ifdef HAVE_STRTOUI64
 #define	strtoull(x, y, z)	_strtoui64(x, y, z)
-#endif /* MINGW */
+#else
+#define	strtoull(x, y, z)	strtoul(x, y, z)
+#endif /* HAVE_STRTOUI64 */
 
 #define	write(x, y, z)		_write(x, y, (unsigned) z)
 #define	read(x, y, z)		_read(x, y, (unsigned) z)
@@ -105,14 +105,17 @@
 
 typedef HANDLE pthread_mutex_t;
 
-#ifdef __LCC__
+#if !defined(S_ISDIR)
+#define S_ISDIR(x)		((x) & _S_IFDIR)
+#endif /* S_ISDIR */
+
+#if defined(HAVE_STDINT)
 #include <stdint.h>
-#elif _MSC_VER		/* MinGW already has these */
+#else
 typedef unsigned int		uint32_t;
 typedef unsigned short		uint16_t;
 typedef unsigned __int64	uint64_t;
-#define S_ISDIR(x)		((x) & _S_IFDIR)
-#endif /* __LCC__ */
+#endif /* HAVE_STDINT */
 
 /*
  * POSIX dirent interface
@@ -1968,16 +1971,12 @@ compare_dir_entries(const void *p1, const void *p2)
 	const char	*q = a->conn->request_info.query_string;
 	int		cmp_result = 0;
 
-	if (!strcmp(a->file_name, "..")) {
-		return (-1);
-	} else if (!strcmp(b->file_name, "..")) {
-		return (1);
-	} else if (*q == 'n') {
+	if (*q == 'n') {
 		cmp_result = strcmp(a->file_name, b->file_name);
 	} else if (*q == 's') {
 		cmp_result = a->st.st_size - b->st.st_size;
 	} else if (*q == 'd') {
-		cmp_result = a->st.st_mtime - b->st.st_mtime;
+		cmp_result = (int) (a->st.st_mtime >= b->st.st_mtime);
 	}
 
 	return (q[1] == 'd' ? -cmp_result : cmp_result);
