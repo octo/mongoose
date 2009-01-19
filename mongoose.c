@@ -390,7 +390,10 @@ mg_strcasecmp(const char *str1, const char *str2)
 	size_t	len = strlen(str1);
 	int	res = mg_strncasecmp(str1, str2, len);
 
-	return (str2[len] == '\0' ? res : -str2[len]);
+	if (res != 0)
+		return (res);
+	else
+		return (-str2[len]); /* If str2[len] == 0, -0 == 0. */
 }
 
 static char *
