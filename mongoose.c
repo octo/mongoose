@@ -387,7 +387,10 @@ mg_strncasecmp(const char *str1, const char *str2, size_t len)
 static int
 mg_strcasecmp(const char *str1, const char *str2)
 {
-	return (mg_strncasecmp(str1, str2, strlen(str1)));
+	size_t	len = strlen(str1);
+	int	res = mg_strncasecmp(str1, str2, len);
+
+	return (str2[len] == '\0' ? res : -str2[len]);
 }
 
 static char *

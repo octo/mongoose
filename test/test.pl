@@ -196,6 +196,7 @@ my $mime_types = {
 	js => 'application/x-javascript',
 	css => 'text/css',
 	jpg => 'image/jpeg',
+	c => 'text/plain',
 };
 
 foreach my $key (keys %$mime_types) {
