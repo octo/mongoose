@@ -3631,7 +3631,8 @@ mg_start(void)
 			}
 
 	/* Initial document root is set to current working directory */
-	ctx->options[OPT_ROOT] = getcwd(NULL, 0);
+	if (ctx->options[OPT_ROOT] == NULL)
+		ctx->options[OPT_ROOT] = getcwd(NULL, 0);
 
 #if 0
 	tm->tm_gmtoff - 3600 * (tm->tm_isdst > 0 ? 1 : 0);
