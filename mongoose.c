@@ -266,13 +266,14 @@ enum mg_option_index {
 	OPT_CGI_INTERPRETER, OPT_SSI_EXTENSIONS, OPT_AUTH_DOMAIN,
 	OPT_AUTH_GPASSWD, OPT_AUTH_PUT, OPT_ACCESS_LOG, OPT_ERROR_LOG,
 	OPT_SSL_CERTIFICATE, OPT_ALIASES, OPT_ACL, OPT_UID,
-	OPT_PROTECT, OPT_SERVICE, OPT_HIDE, OPT_ADMIN_URI,
+	OPT_PROTECT, OPT_SERVICE, OPT_HIDE, OPT_ADMIN_URI, OPT_THREADS,
 	NUM_OPTIONS
 };
 
-struct listener {
-	SOCKET	sock;		/* Listening socket		*/
-	int	is_ssl;		/* Should be SSL-ed		*/
+struct socket {
+	SOCKET		sock;		/* Listening socket		*/
+	int		is_ssl;		/* Should be SSL-ed		*/
+	struct usa	usa;		/* Socket address		*/
 };
 
 /*
@@ -287,6 +288,23 @@ struct callback {
 };
 
 /*
+ * Socket pool.
+ * Master thread to enqueue accepted sockets by means of put_socket() function.
+ * Worker threads grab sockets from the queue using get_socket() function.
+ */
+struct socket_pool {
+	struct socket	sockets[20];	/* Array of sockets to process	*/
+
+	int		size;		/* Ringbuffer pointers		*/
+	int		head;
+	int		tail;
+
+	pthread_mutex_t	mutex;
+	pthread_cond_t	put_cond;
+	pthread_cond_t	get_cond;
+};
+
+/*
  * Mongoose context
  */
 struct mg_context {
@@ -296,7 +314,7 @@ struct mg_context {
 	FILE		*access_log;	/* Opened access log		*/
 	FILE		*error_log;	/* Opened error log		*/
 
-	struct listener	listeners[MAX_LISTENING_SOCKETS];
+	struct socket	listeners[MAX_LISTENING_SOCKETS];
 	int		num_listeners;
 
 	struct callback	callbacks[MAX_CALLBACKS];
@@ -304,6 +322,7 @@ struct mg_context {
 
 	char	*options[NUM_OPTIONS];	/* Configured opions		*/
 	pthread_mutex_t	mutex;		/* Option setter/getter guard	*/
+	struct socket_pool socket_pool;	/* Socket pool			*/
 
 	mg_spcb_t	ssl_password_callback;
 };
@@ -453,6 +472,79 @@ mg_snprintf(char *buf, size_t buflen, const char *fmt, ...)
 	va_end(ap);
 
 	return (n);
+}
+
+static int
+get_pool_space(const struct socket_pool *pool)
+{
+	return (pool->size - (pool->head - pool->tail));
+}
+
+static void
+init_socket_pool(struct socket_pool *pool)
+{
+	pool->size = (int) ARRAY_SIZE(pool->sockets) - 1;
+	pool->head = pool->tail = 0;
+
+	(void) pthread_mutex_init(&pool->mutex, NULL);
+	(void) pthread_cond_init(&pool->put_cond, NULL);
+	(void) pthread_cond_init(&pool->get_cond, NULL);
+}
+
+static void
+destroy_socket_pool(struct socket_pool *pool)
+{
+	int	i;
+
+	(void) pthread_mutex_destroy(&pool->mutex);
+	(void) pthread_cond_destroy(&pool->put_cond);
+	(void) pthread_cond_destroy(&pool->get_cond);
+
+	/* TODO: close sockets */
+	for (i = 0; i < get_pool_space(pool); i++)
+		(void) closesocket(pool->sockets[i].sock);
+}
+
+/*
+ * Put socket into the pool
+ */
+static void
+put_socket(struct socket_pool *pool, const struct socket *sp)
+{
+	(void) pthread_mutex_lock(&pool->mutex);
+
+	while (get_pool_space(pool) == 0)
+		(void) pthread_cond_wait(&pool->put_cond, &pool->mutex);
+
+	pool->sockets[pool->head++ % pool->size] = *sp;
+
+	(void) pthread_cond_signal(&pool->get_cond);
+	(void) pthread_mutex_unlock(&pool->mutex);
+}
+
+/*
+ * Get index of the socket to process
+ */
+static void
+get_socket(struct socket_pool *pool, struct socket *sp)
+{
+	pthread_mutex_lock(&pool->mutex);
+
+	while (get_pool_space(pool) == pool->size)
+		(void) pthread_cond_wait(&pool->get_cond, &pool->mutex);
+
+	*sp = pool->sockets[pool->tail++ % pool->size];
+
+	assert(pool->tail <= pool->head);
+
+	/* Wrap pointers if they both are greater than the pool size */
+	if (pool->tail > pool->size) {
+		pool->tail %= pool->size;
+		pool->head %= pool->size;
+	}
+
+	pthread_cond_signal(&pool->put_cond);
+	pthread_mutex_unlock(&pool->mutex);
 }
 
 /*
@@ -3069,6 +3161,7 @@ mg_fini(struct mg_context *ctx)
 
 	/* TODO: free SSL context */
 	(void) pthread_mutex_destroy(&ctx->mutex);
+	destroy_socket_pool(&ctx->socket_pool);
 
 	free(ctx);
 }
@@ -3292,6 +3385,7 @@ static const struct mg_option known_options[] = {
 	{"aliases", "Path=URI mappings", NULL},
 	{"admin_uri", "Administration page URI", NULL},
 	{"acl", "\tAllow/deny IP addresses/subnets", NULL},
+	{"threads", "Thread pool size", "5"},
 	{NULL, NULL, NULL}
 };
 
@@ -3325,6 +3419,7 @@ static const struct option_setter {
 	{OPT_ALIASES,		NULL},
 	{OPT_ADMIN_URI,		&set_admin_uri_option},
 	{OPT_ACL,		NULL},
+	{OPT_THREADS,		NULL},
 	{-1,			NULL}
 };
 
@@ -3433,7 +3528,6 @@ close_connection(struct mg_connection *conn)
 	if (conn->sock != INVALID_SOCKET) {
 		close_socket_gracefully(conn->sock);
 	}
-	free(conn);
 }
 
 static void
@@ -3484,6 +3578,9 @@ process_new_connection(struct mg_connection *conn)
 			    buf, sizeof(buf), &nread);
 		assert(nread >= request_len);
 
+		if (request_len == 0)
+			break;	/* Remote end closed the connection */
+
 		/*
 		 * This sets conn->keep_alive to FALSE, so by default
 		 * we break the loop.
@@ -3491,11 +3588,9 @@ process_new_connection(struct mg_connection *conn)
 		reset_connection_attributes(conn);
 
 		/* 0-terminate the request: parse_request uses sscanf */
-		if (request_len > 0)
-			buf[request_len - 1] = '\0';
+		buf[request_len - 1] = '\0';
 
-		if (request_len > 0 &&
-		    parse_http_request(buf, ri, &conn->rsa)) {
+		if (parse_http_request(buf, ri, &conn->rsa)) {
 			if (ri->http_version_major != 1 ||
 			     (ri->http_version_major == 1 &&
 			     (ri->http_version_minor < 0 ||
@@ -3518,47 +3613,55 @@ process_new_connection(struct mg_connection *conn)
 		}
 
 	} while (conn->keep_alive);
-
-	close_connection(conn);
 }
 
 static void
-accept_new_connection(const struct listener *l, struct mg_context *ctx)
+accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 {
-	struct mg_connection	*conn = NULL;
-	bool_t			ok = FALSE;
+	struct socket	rem;
 
-	if ((conn = (struct mg_connection*) calloc(1, sizeof(*conn))) == NULL) {
-		cry("Cannot allocate new connection");
-	} else if ((conn->rsa.len = sizeof(conn->rsa.u.sin)) <= 0) {
-		/* Never ever happens. */
-		abort();
-	} else if ((conn->sock = accept(l->sock,
-	    &conn->rsa.u.sa, &conn->rsa.len)) == -1) {
+	rem.usa.len = sizeof(rem.usa.u.sin);
+
+	if ((rem.sock = accept(listener->sock,
+	    &rem.usa.u.sa, &rem.usa.len)) == -1) {
 		cry("accept: %d", ERRNO);
-	} else if (!check_acl(ctx, &conn->rsa)) {
-		cry("%s is not allowed to connect",
-		    inet_ntoa(conn->rsa.u.sin.sin_addr));
-	} else if (l->is_ssl && (conn->ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
-		cry("%s: SSL_new: %s", __func__, strerror(ERRNO));
-	} else if (l->is_ssl && SSL_set_fd(conn->ssl, conn->sock) != 1) {
-		cry("%s: SSL_set_fd: %s", __func__, strerror(ERRNO));
-	} else if (l->is_ssl && SSL_accept(conn->ssl) != 1) {
-		cry("%s: SSL handshake failed", __func__);
+	} else if (!check_acl(ctx, &rem.usa)) {
+		(void) closesocket(rem.sock);
+		cry("%s: denied by ACL", inet_ntoa(rem.usa.u.sin.sin_addr));
 	} else {
-		conn->ctx = ctx;
-		conn->birth_time = time(NULL);
-		if (start_thread((mg_thread_func_t)
-		    process_new_connection, conn) == 0)
-			ok = TRUE;
+		rem.is_ssl = listener->is_ssl;
+		put_socket(&ctx->socket_pool, &rem);
 	}
-
-	if (conn != NULL && ok == FALSE)
-		close_connection(conn);
 }
 
 static void
-event_loop(struct mg_context *ctx)
+worker_loop(struct mg_context *ctx)
+{
+	struct mg_connection	conn;
+	struct socket		rem;
+
+	for (;;) {
+		get_socket(&ctx->socket_pool, &rem);
+		conn.sock = rem.sock;
+		conn.rsa = rem.usa;
+		conn.ctx = ctx;
+		conn.birth_time = time(NULL);
+
+		if (rem.is_ssl && (conn.ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
+			cry("%s: SSL_new: %s", __func__, strerror(ERRNO));
+		} else if (rem.is_ssl && SSL_set_fd(conn.ssl, conn.sock) != 1) {
+			cry("%s: SSL_set_fd: %s", __func__, strerror(ERRNO));
+		} else if (rem.is_ssl && SSL_accept(conn.ssl) != 1) {
+			cry("%s: SSL handshake failed", __func__);
+		} else {
+			process_new_connection(&conn);
+		}
+		close_connection(&conn);
+	}
+}
+
+static void
+listening_loop(struct mg_context *ctx)
 {
 	fd_set		read_set;
 	struct timeval	tv;
@@ -3642,8 +3745,14 @@ mg_start(void)
 	{WSADATA data;	WSAStartup(MAKEWORD(2,2), &data);}
 #endif /* _WIN32 */
 
+	/* Start worker threads */
+	init_socket_pool(&ctx->socket_pool);
+	for (i = 0; i < atoi(ctx->options[OPT_THREADS]); i++)
+		start_thread((mg_thread_func_t) worker_loop, ctx);
+
+	/* Start master (listening) thread */
 	(void) pthread_mutex_init(&ctx->mutex, NULL);
-	start_thread((mg_thread_func_t) event_loop, ctx);
+	start_thread((mg_thread_func_t) listening_loop, ctx);
 
 	return (ctx);
 }
