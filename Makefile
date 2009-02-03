@@ -1,6 +1,6 @@
 PROG=	mongoose
 SRCS=	main.c mongoose.c
-COPT=	-W -Wall -std=c99 -pedantic -Os -s -D_POSIX_SOURCE -D_BSD_SOURCE
+COPT=	-W -Wall -std=c99 -pedantic -Os -s
 
 # Possible flags: (in brackets are rough numbers for 'gcc -O2' on i386)
 # -DHAVE_MD5		- use system md5 library (-2kb)
@@ -16,7 +16,8 @@ all:
 	@echo "make (linux|bsd|windows|mingw|rtems)"
 
 linux:
-	$(CC) $(COPT) $(CFLAGS) $(SRCS) -ldl -lpthread -o $(PROG)
+	$(CC) $(COPT) $(CFLAGS)  -D_POSIX_SOURCE -D_BSD_SOURCE \
+		$(SRCS) -ldl -lpthread -o $(PROG)
 
 bsd:
 	$(CC) $(COPT) $(CFLAGS) $(SRCS) -lpthread -o $(PROG)
