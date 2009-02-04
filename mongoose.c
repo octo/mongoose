@@ -3656,6 +3656,8 @@ worker_loop(struct mg_context *ctx)
 		conn.rsa = rem.usa;
 		conn.ctx = ctx;
 		conn.birth_time = time(NULL);
+		conn.ssl = NULL;
+		conn.free_post_data = conn.keep_alive = FALSE;
 
 		if (rem.is_ssl && (conn.ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
 			cry("%s: SSL_new: %s", __func__, strerror(ERRNO));
