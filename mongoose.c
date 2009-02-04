@@ -387,7 +387,7 @@ mg_strlcpy(register char *dst, register const char *src, size_t n)
 }
 
 static int
-lc(const char *s)
+lowercase(const char *s)
 {
 	return (tolower(* (unsigned char *) s));
 }
@@ -399,7 +399,7 @@ mg_strncasecmp(const char *s1, const char *s2, size_t len)
 
 	if (len > 0)
 		do {
-			diff = lc(s1++) - lc(s2++);
+			diff = lowercase(s1++) - lowercase(s2++);
 		} while (diff == 0 && s1[-1] != '\0' && --len > 0);
 
 	return (diff);
@@ -411,7 +411,7 @@ mg_strcasecmp(const char *s1, const char *s2)
 	int	diff;
 
 	do {
-		diff = lc(s1++) - lc(s2++);
+		diff = lowercase(s1++) - lowercase(s2++);
 	} while (diff == 0 && s1[-1] != '\0');
 
 	return (diff);
