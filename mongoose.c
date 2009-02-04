@@ -496,13 +496,21 @@ destroy_socket_pool(struct socket_pool *pool)
 {
 	int	i;
 
+	pthread_mutex_lock(&pool->mutex);
+	for (i = 0; i < get_pool_space(pool); i++)
+		(void) closesocket(pool->sockets[i].sock);
+	pthread_mutex_unlock(&pool->mutex);
+
+	/*
+	 * TODO: all threads in a thread pool are blocked on pool->mutex.
+	 * Before destroying the mutex, send a termination signal to all
+	 * of these threads, and let them exit. Only after that destroy
+	 * the mutex.
+	 */
+
 	(void) pthread_mutex_destroy(&pool->mutex);
 	(void) pthread_cond_destroy(&pool->put_cond);
 	(void) pthread_cond_destroy(&pool->get_cond);
-
-	/* TODO: close sockets */
-	for (i = 0; i < get_pool_space(pool); i++)
-		(void) closesocket(pool->sockets[i].sock);
 }
 
 /*
