@@ -381,6 +381,11 @@ sub do_embedded_test {
 	# + in form data MUST be decoded to space	
 	o("POST /test_get_var HTTP/1.0\nContent-Length: 10\n\n".
 		"my_var=b+c", 'Value: \[b c\]', 'mg_get_var 7', 0);
+
+	# Test that big POSTed vars are not truncated
+	my $my_var = 'x' x 64000;
+	o("POST /test_get_var HTTP/1.0\nContent-Length: 64007\n\n".
+		"my_var=$my_var", 'Value size: \[64000\]', 'mg_get_var 8', 0);
 	
 		
 	o("POST /test_get_request_info?xx=yy HTTP/1.0\nFoo: bar\n".

@@ -48,7 +48,8 @@ test_get_var(struct mg_connection *conn, const struct mg_request_info *ri,
 
 	value = mg_get_var(conn, "my_var");
 	if (value != NULL) {
-		mg_printf(conn, "Value: [%s]", value);
+		mg_printf(conn, "Value: [%s]\n", value);
+		mg_printf(conn, "Value size: [%zu]\n", strlen(value));
 		free(value);
 	}
 }
@@ -60,6 +61,16 @@ test_get_header(struct mg_connection *conn, const struct mg_request_info *ri,
 	const char *value;
 
 	mg_printf(conn, "%s", standard_reply);
+
+	{
+		int	i;
+		printf("HTTP headers: %d\n", ri->num_headers);
+		for (i = 0; i < ri->num_headers; i++)
+			printf("[%s]: [%s]\n",
+					ri->http_headers[i].name,
+					ri->http_headers[i].value);
+	}
+
 
 	value = mg_get_header(conn, "Host");
 	if (value != NULL)
@@ -129,6 +140,14 @@ test_protect(struct mg_connection *conn, const struct mg_request_info *ri,
 	* (long *) user_data = allowed ? 1 : 0;
 }
 
+static void
+test_post(struct mg_connection *conn, const struct mg_request_info *ri,
+		void *user_data)
+{
+	mg_printf(conn, "%s", standard_reply);
+	mg_write(conn, ri->post_data, ri->post_data_len);
+}
+
 int main(void)
 {
 	int	user_data = 1234;
@@ -141,6 +160,7 @@ int main(void)
 	mg_bind_to_uri(ctx, "/test_get_request_info", &test_get_ri, NULL);
 	mg_bind_to_uri(ctx, "/foo/*", &test_get_ri, NULL);
 	mg_bind_to_uri(ctx, "/test_user_data", &test_user_data, &user_data);
+	mg_bind_to_uri(ctx, "/p", &test_post, NULL);
 
 	mg_bind_to_error_code(ctx, 404, &test_error, NULL);
 	mg_bind_to_error_code(ctx, 0, &test_error, NULL);
