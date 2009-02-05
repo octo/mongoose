@@ -1204,11 +1204,12 @@ static char *
 get_var(const char *name, const char *buf, size_t buf_len)
 {
 	const char	*p, *e, *s;
-	char		tmp[BUFSIZ];
-	size_t		var_len;
+	char		*val;
+	size_t		var_len, len;
 
 	var_len = strlen(name);
 	e = buf + buf_len;
+	val = NULL;
 
 	/* buf is "var1=val1&var2=val2...". Find variable first */
 	for (p = buf; p + var_len < e; p++)
@@ -1223,12 +1224,14 @@ get_var(const char *name, const char *buf, size_t buf_len)
 			if (s == NULL)
 				s = e;
 
-			/* URL-decode value. Return result length */
-			(void) url_decode(p, s - p, tmp, sizeof(tmp), TRUE);
-			return (mg_strdup(tmp));
+			/* Try to allocate the buffer */
+			len = s - p + 1;
+			if ((val = malloc(len)) != NULL)
+				(void) url_decode(p, len, val, len, TRUE);
+			break;
 		}
 
-	return (NULL);
+	return (val);
 }
 
 /*
@@ -1458,7 +1461,6 @@ static const struct {
 	{"zip",		"application/x-zip-compressed"	},
 	{"xls",		"application/excel"		},
 	{"tgz",		"application/x-tar-gz"		},
-	{"tar.gz",	"application/x-tar-gz"		},
 	{"tar",		"application/x-tar"		},
 	{"gz",		"application/x-gunzip"		},
 	{"arj",		"application/x-arj-compressed"	},
@@ -1477,18 +1479,13 @@ static const struct {
 static const char *
 get_mime_type(const char *path)
 {
-	const char	*extension;
-	size_t		i, ext_len;
+	size_t		i;
+	const char	*ext;
 
-	if ((extension = strrchr(path, '.')) != NULL) {
-
-		extension++;
-		ext_len = strlen(extension);
-
-		/* If no luck, try built-in mime types */
+	if ((ext = strrchr(path, '.')) != NULL) {
+		ext++;
 		for (i = 0; mime_types[i].extension != NULL; i++)
-			if (!mg_strcasecmp(extension,
-			    mime_types[i].extension))
+			if (!mg_strcasecmp(ext, mime_types[i].extension))
 				return (mime_types[i].mime_type);
 	}
 
