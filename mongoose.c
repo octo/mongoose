@@ -3392,7 +3392,7 @@ static const struct mg_option known_options[] = {
 	{"aliases", "Path=URI mappings", NULL},
 	{"admin_uri", "Administration page URI", NULL},
 	{"acl", "\tAllow/deny IP addresses/subnets", NULL},
-	{"threads", "Thread pool size", "5"},
+	{"threads", "Thread pool size", "23"},
 	{NULL, NULL, NULL}
 };
 
