@@ -104,6 +104,7 @@
 #endif /* !fileno MINGW #defines fileno */
 
 typedef HANDLE pthread_mutex_t;
+typedef HANDLE pthread_cond_t;
 
 #if !defined(S_ISDIR)
 #define S_ISDIR(x)		((x) & _S_IFDIR)
@@ -476,87 +477,6 @@ mg_snprintf(char *buf, size_t buflen, const char *fmt, ...)
 	return (n);
 }
 
-static int
-get_pool_space(const struct socket_pool *pool)
-{
-	return (pool->size - (pool->head - pool->tail));
-}
-
-static void
-init_socket_pool(struct socket_pool *pool)
-{
-	pool->size = (int) ARRAY_SIZE(pool->sockets) - 1;
-	pool->head = pool->tail = 0;
-
-	(void) pthread_mutex_init(&pool->mutex, NULL);
-	(void) pthread_cond_init(&pool->put_cond, NULL);
-	(void) pthread_cond_init(&pool->get_cond, NULL);
-}
-
-static void
-destroy_socket_pool(struct socket_pool *pool)
-{
-	int	i;
-
-	pthread_mutex_lock(&pool->mutex);
-	for (i = 0; i < get_pool_space(pool); i++)
-		(void) closesocket(pool->sockets[i].sock);
-	pthread_mutex_unlock(&pool->mutex);
-
-	/*
-	 * TODO: all threads in a thread pool are blocked on pool->mutex.
-	 * Before destroying the mutex, send a termination signal to all
-	 * of these threads, and let them exit. Only after that destroy
-	 * the mutex.
-	 */
-
-	(void) pthread_mutex_destroy(&pool->mutex);
-	(void) pthread_cond_destroy(&pool->put_cond);
-	(void) pthread_cond_destroy(&pool->get_cond);
-}
-
-/*
- * Put socket into the pool
- */
-static void
-put_socket(struct socket_pool *pool, const struct socket *sp)
-{
-	(void) pthread_mutex_lock(&pool->mutex);
-
-	while (get_pool_space(pool) == 0)
-		(void) pthread_cond_wait(&pool->put_cond, &pool->mutex);
-
-	pool->sockets[pool->head++ % pool->size] = *sp;
-
-	(void) pthread_cond_signal(&pool->get_cond);
-	(void) pthread_mutex_unlock(&pool->mutex);
-}
-
-/*
- * Get index of the socket to process
- */
-static void
-get_socket(struct socket_pool *pool, struct socket *sp)
-{
-	pthread_mutex_lock(&pool->mutex);
-
-	while (get_pool_space(pool) == pool->size)
-		(void) pthread_cond_wait(&pool->get_cond, &pool->mutex);
-
-	*sp = pool->sockets[pool->tail++ % pool->size];
-
-	assert(pool->tail <= pool->head);
-
-	/* Wrap pointers if they both are greater than the pool size */
-	if (pool->tail > pool->size) {
-		pool->tail %= pool->size;
-		pool->head %= pool->size;
-	}
-
-	pthread_cond_signal(&pool->put_cond);
-	pthread_mutex_unlock(&pool->mutex);
-}
-
 /*
  * Convert string representing a boolean value to a boolean value
  */
@@ -712,26 +632,57 @@ send_error(struct mg_connection *conn, int status, const char *reason,
 
 #ifdef _WIN32
 static int
-pthread_mutex_init(pthread_mutex_t *mutex, void *unused) {
+pthread_mutex_init(pthread_mutex_t *mutex, void *unused)
+{
 	unused = NULL;
 	*mutex = CreateMutex(NULL, FALSE, NULL);
 	return (*mutex == NULL ? -1 : 0);
 }
 
 static int
-pthread_mutex_destroy(pthread_mutex_t *mutex) {
-	CloseHandle(*mutex);
-	return (0);
+pthread_mutex_destroy(pthread_mutex_t *mutex)
+{
+	return (CloseHandle(*mutex) == 0 ? -1 : 0);
 }
 
 static int
-pthread_mutex_lock(pthread_mutex_t *mutex) {
+pthread_mutex_lock(pthread_mutex_t *mutex)
+{
 	return (WaitForSingleObject(*mutex, INFINITE) == WAIT_OBJECT_0? 0 : -1);
 }
 
 static int
-pthread_mutex_unlock(pthread_mutex_t *mutex) {
+pthread_mutex_unlock(pthread_mutex_t *mutex)
+{
 	return (ReleaseMutex(*mutex) == 0 ? -1 : 0);
+}
+
+static int
+pthread_cond_init(pthread_cond_t *cv, const void *unused)
+{
+	unused = NULL;
+	*cv = CreateEvent(NULL, FALSE, FALSE, NULL);
+	return (*cv == NULL ? -1 : 0);
+}
+
+static int
+pthread_cond_wait(pthread_cond_t *cv, pthread_mutex_t *mutex)
+{
+	SignalObjectAndWait(*mutex, *cv, INFINITE, FALSE);
+	WaitForSingleObject(*mutex, INFINITE);
+	return (0);
+}
+
+static int
+pthread_cond_signal(pthread_cond_t *cv)
+{
+	return (SetEvent(*cv) == 0 ? -1 : 0);
+}
+
+static int
+pthread_cond_destroy(pthread_cond_t *cv)
+{
+	return (CloseHandle(*cv) == 0 ? -1 : 0);
 }
 
 static void
@@ -1069,6 +1020,88 @@ mg_unlock(struct mg_context *ctx)
 	if (pthread_mutex_unlock(&ctx->mutex) != 0)
 		cry("pthread_mutex_unlock: %s", strerror(ERRNO));
 }
+
+static int
+get_pool_space(const struct socket_pool *pool)
+{
+	return (pool->size - (pool->head - pool->tail));
+}
+
+static void
+init_socket_pool(struct socket_pool *pool)
+{
+	pool->size = (int) ARRAY_SIZE(pool->sockets) - 1;
+	pool->head = pool->tail = 0;
+
+	pthread_mutex_init(&pool->mutex, NULL);
+	pthread_cond_init(&pool->put_cond, NULL);
+	pthread_cond_init(&pool->get_cond, NULL);
+}
+
+static void
+destroy_socket_pool(struct socket_pool *pool)
+{
+	int	i;
+
+	pthread_mutex_lock(&pool->mutex);
+	for (i = 0; i < get_pool_space(pool); i++)
+		(void) closesocket(pool->sockets[i].sock);
+	pthread_mutex_unlock(&pool->mutex);
+
+	/*
+	 * TODO: all threads in a thread pool are blocked on pool->mutex.
+	 * Before destroying the mutex, send a termination signal to all
+	 * of these threads, and let them exit. Only after that destroy
+	 * the mutex.
+	 */
+
+	pthread_mutex_destroy(&pool->mutex);
+	pthread_cond_destroy(&pool->put_cond);
+	pthread_cond_destroy(&pool->get_cond);
+}
+
+/*
+ * Put socket into the pool
+ */
+static void
+put_socket(struct socket_pool *pool, const struct socket *sp)
+{
+	(void) pthread_mutex_lock(&pool->mutex);
+
+	while (get_pool_space(pool) == 0)
+		pthread_cond_wait(&pool->put_cond, &pool->mutex);
+
+	pool->sockets[pool->head++ % pool->size] = *sp;
+
+	pthread_cond_signal(&pool->get_cond);
+	pthread_mutex_unlock(&pool->mutex);
+}
+
+/*
+ * Get index of the socket to process
+ */
+static void
+get_socket(struct socket_pool *pool, struct socket *sp)
+{
+	pthread_mutex_lock(&pool->mutex);
+
+	while (get_pool_space(pool) == pool->size)
+		pthread_cond_wait(&pool->get_cond, &pool->mutex);
+
+	*sp = pool->sockets[pool->tail++ % pool->size];
+
+	assert(pool->tail <= pool->head);
+
+	/* Wrap pointers if they both are greater than the pool size */
+	if (pool->tail > pool->size) {
+		pool->tail %= pool->size;
+		pool->head %= pool->size;
+	}
+
+	pthread_cond_signal(&pool->put_cond);
+	pthread_mutex_unlock(&pool->mutex);
+}
+
 
 /*
  * Write data to the IO channel - opened file descriptor, socket or SSL
