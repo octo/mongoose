@@ -49,7 +49,7 @@ test_get_var(struct mg_connection *conn, const struct mg_request_info *ri,
 	value = mg_get_var(conn, "my_var");
 	if (value != NULL) {
 		mg_printf(conn, "Value: [%s]\n", value);
-		mg_printf(conn, "Value size: [%zu]\n", strlen(value));
+		mg_printf(conn, "Value size: [%u]\n", (unsigned) strlen(value));
 		free(value);
 	}
 }
