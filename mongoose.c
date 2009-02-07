@@ -2045,7 +2045,7 @@ print_dir_entry(struct de *de)
 	char		size[64], mod[64];
 
 	if (S_ISDIR(de->st.st_mode)) {
-		(void) mg_snprintf(size, sizeof(size), "%s", "&lt;DIR&gt;");
+		(void) mg_snprintf(size, sizeof(size), "%s", "[DIRECTORY]");
 	} else {
 		if (de->st.st_size < 1024)
 			(void) mg_snprintf(size, sizeof(size),
@@ -2080,9 +2080,9 @@ compare_dir_entries(const void *p1, const void *p2)
 		query_string = "na";
 
 	if (S_ISDIR(a->st.st_mode) && !S_ISDIR(b->st.st_mode)) {
-		cmp_result = -1;
+		return (-1);  /* Always put directories on top */
 	} else if (!S_ISDIR(a->st.st_mode) && S_ISDIR(b->st.st_mode)) {
-		cmp_result = 1;
+		return (1);   /* Always put directories on top */
 	} else if (*query_string == 'n') {
 		cmp_result = strcmp(a->file_name, b->file_name);
 	} else if (*query_string == 's') {
