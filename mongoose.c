@@ -2073,20 +2073,27 @@ static int
 compare_dir_entries(const void *p1, const void *p2)
 {
 	const struct de	*a = (struct de *) p1, *b = (struct de *) p2;
-	const char	*q = a->conn->request_info.query_string;
+	const char	*query_string = a->conn->request_info.query_string;
 	int		cmp_result = 0;
 
-	if (*q == 'n') {
+	if (query_string == NULL)
+		query_string = "na";
+
+	if (S_ISDIR(a->st.st_mode) && !S_ISDIR(b->st.st_mode)) {
+		cmp_result = -1;
+	} else if (!S_ISDIR(a->st.st_mode) && S_ISDIR(b->st.st_mode)) {
+		cmp_result = 1;
+	} else if (*query_string == 'n') {
 		cmp_result = strcmp(a->file_name, b->file_name);
-	} else if (*q == 's') {
+	} else if (*query_string == 's') {
 		cmp_result = a->st.st_size == b->st.st_size ? 0 :
 			a->st.st_size > b->st.st_size ? 1 : -1;
-	} else if (*q == 'd') {
+	} else if (*query_string == 'd') {
 		cmp_result = a->st.st_mtime == b->st.st_mtime ? 0 :
 			a->st.st_mtime > b->st.st_mtime ? 1 : -1;
 	}
 
-	return (q[1] == 'd' ? -cmp_result : cmp_result);
+	return (query_string[1] == 'd' ? -cmp_result : cmp_result);
 }
 
 static void
@@ -2142,10 +2149,6 @@ send_directory(struct mg_connection *conn, const char *dir)
 	}
 	(void) closedir(dirp);
 
-	if (conn->request_info.query_string != NULL)
-		qsort(entries, num_entries,
-		    sizeof(entries[0]), compare_dir_entries);
-
 	conn->num_bytes_sent += mg_printf(conn,
 	    "<html><head><title>Index of %s</title>"
 	    "<style>th {text-align: left;}</style></head>"
@@ -2163,6 +2166,8 @@ send_directory(struct mg_connection *conn, const char *dir)
 	    "<td>&nbsp;%s</td><td>&nbsp;&nbsp;%s</td></tr>\n",
 	    conn->request_info.uri, "..", "Parent directory", "-", "-");	
 
+	/* Sort and print directory entries */
+	qsort(entries, num_entries, sizeof(entries[0]), compare_dir_entries);
 	for (i = 0; i < num_entries; i++) {
 		print_dir_entry(&entries[i]);
 		free(entries[i].file_name);
