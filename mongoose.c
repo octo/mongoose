@@ -273,8 +273,11 @@ enum mg_option_index {
 
 struct socket {
 	SOCKET		sock;		/* Listening socket		*/
-	int		is_ssl;		/* Should be SSL-ed		*/
 	struct usa	usa;		/* Socket address		*/
+
+	unsigned int	flags;		/* Flags			*/
+#define	FLAG_SSL	1
+#define	FLAG_TERMINATE	2
 };
 
 /*
@@ -1030,7 +1033,7 @@ get_pool_space(const struct socket_pool *pool)
 static void
 init_socket_pool(struct socket_pool *pool)
 {
-	pool->size = (int) ARRAY_SIZE(pool->sockets) - 1;
+	pool->size = (int) ARRAY_SIZE(pool->sockets);
 	pool->head = pool->tail = 0;
 
 	pthread_mutex_init(&pool->mutex, NULL);
@@ -1088,14 +1091,12 @@ get_socket(struct socket_pool *pool, struct socket *sp)
 	while (get_pool_space(pool) == pool->size)
 		pthread_cond_wait(&pool->get_cond, &pool->mutex);
 
-	*sp = pool->sockets[pool->tail++ % pool->size];
+	*sp = pool->sockets[pool->tail++];
 
-	assert(pool->tail <= pool->head);
-
-	/* Wrap pointers if they both are greater than the pool size */
-	if (pool->tail > pool->size) {
-		pool->tail %= pool->size;
-		pool->head %= pool->size;
+	/* Wrap pointers */
+	if (pool->tail  == pool->size) {
+		pool->head -= pool->size;
+		pool->tail = 0;
 	}
 
 	pthread_cond_signal(&pool->put_cond);
@@ -1127,12 +1128,10 @@ push(int fd, SOCKET sock, SSL *ssl, const char *buf, uint64_t len)
 			n = send(sock, buf + sent, k, 0);
 		}
 
-		if (n < 0) {
-			cry("%s: %s", __func__, strerror(ERRNO));
+		if (n < 0)
 			break;
-		} else {
-			sent += n;
-		}
+
+		sent += n;
 	}
 
 	return (sent);
@@ -1154,9 +1153,6 @@ pull(int fd, SOCKET sock, SSL *ssl, char *buf, int len)
 	} else {
 		nread = recv(sock, buf, (size_t) len, 0);
 	}
-
-	if (nread < 0)
-		cry("%s failed: %s", __func__, strerror(ERRNO));
 
 	return (nread);
 }
@@ -3048,13 +3044,13 @@ set_ports_option(struct mg_context *ctx, const char *p)
 {
 	SOCKET	sock;
 	size_t	len;
-	int	is_ssl, port;
+	int	flags, port;
 
 	close_all_listening_sockets(ctx);
 
 	FOR_EACH_WORD_IN_LIST(p, len) {
 
-		is_ssl	= p[len - 1] == 's' ? 1 : 0;
+		flags	= p[len - 1] == 's' ? FLAG_SSL : 0;
 		port	= atoi(p);
 
 		if (ctx->num_listeners >=
@@ -3064,14 +3060,14 @@ set_ports_option(struct mg_context *ctx, const char *p)
 		} else if ((sock = mg_open_listening_port(port)) == -1) {
 			cry("cannot open port %d", port);
 			return (FALSE);
-		} else if (is_ssl && ctx->ssl_ctx == NULL) {
+		} else if (flags == FLAG_SSL && ctx->ssl_ctx == NULL) {
 			(void) closesocket(sock);
 			cry("cannot add SSL socket, "
 			    "please specify certificate file");
 			return (FALSE);
 		} else {
 			ctx->listeners[ctx->num_listeners].sock = sock;
-			ctx->listeners[ctx->num_listeners].is_ssl = is_ssl;
+			ctx->listeners[ctx->num_listeners].flags = flags;
 			ctx->num_listeners++;
 		}
 	}
@@ -3396,6 +3392,36 @@ admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
 	(void) mg_printf(conn, "%s", "</table></body></html>");
 }
 
+static void
+terminate_one_thread(struct mg_context *ctx)
+{
+	struct socket fake;
+
+	fake.flags = FLAG_TERMINATE;
+	put_socket(&ctx->socket_pool, &fake);
+}
+
+static void worker_loop(struct mg_context *ctx);
+static bool_t
+set_threads_option(struct mg_context *ctx, const char *str)
+{
+	int	i, old_count, new_count;
+
+	new_count = atoi(str);
+	old_count = atoi(ctx->options[OPT_THREADS]);
+
+	cry("Changing thread pool size: %d -> %d", old_count, new_count);
+	if (new_count > old_count) {
+		for (i = 0; i < new_count - old_count; i++)
+			start_thread((mg_thread_func_t) worker_loop, ctx);
+	} else {
+		for (i = 0; i < old_count - new_count; i++)
+			terminate_one_thread(ctx);
+	}
+
+	return (TRUE);
+}
+
 static bool_t
 set_admin_uri_option(struct mg_context *ctx, const char *uri)
 {
@@ -3464,7 +3490,7 @@ static const struct option_setter {
 	{OPT_ALIASES,		NULL},
 	{OPT_ADMIN_URI,		&set_admin_uri_option},
 	{OPT_ACL,		NULL},
-	{OPT_THREADS,		NULL},
+	{OPT_THREADS,		set_threads_option},
 	{-1,			NULL}
 };
 
@@ -3674,7 +3700,7 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 		(void) closesocket(rem.sock);
 		cry("%s: denied by ACL", inet_ntoa(rem.usa.u.sin.sin_addr));
 	} else {
-		rem.is_ssl = listener->is_ssl;
+		rem.flags = listener->flags;
 		put_socket(&ctx->socket_pool, &rem);
 	}
 }
@@ -3684,9 +3710,14 @@ worker_loop(struct mg_context *ctx)
 {
 	struct mg_connection	conn;
 	struct socket		rem;
+	bool_t			ssl;
 
 	for (;;) {
 		get_socket(&ctx->socket_pool, &rem);
+
+		if (rem.flags & FLAG_TERMINATE)
+			break;
+
 		conn.sock = rem.sock;
 		conn.rsa = rem.usa;
 		conn.ctx = ctx;
@@ -3694,11 +3725,12 @@ worker_loop(struct mg_context *ctx)
 		conn.ssl = NULL;
 		conn.free_post_data = conn.keep_alive = FALSE;
 
-		if (rem.is_ssl && (conn.ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
+		ssl = rem.flags & FLAG_SSL;
+		if (ssl && (conn.ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
 			cry("%s: SSL_new: %s", __func__, strerror(ERRNO));
-		} else if (rem.is_ssl && SSL_set_fd(conn.ssl, conn.sock) != 1) {
+		} else if (ssl && SSL_set_fd(conn.ssl, conn.sock) != 1) {
 			cry("%s: SSL_set_fd: %s", __func__, strerror(ERRNO));
-		} else if (rem.is_ssl && SSL_accept(conn.ssl) != 1) {
+		} else if (ssl && SSL_accept(conn.ssl) != 1) {
 			cry("%s: SSL handshake failed", __func__);
 		} else {
 			process_new_connection(&conn);
