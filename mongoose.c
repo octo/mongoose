@@ -3410,7 +3410,6 @@ set_threads_option(struct mg_context *ctx, const char *str)
 	new_count = atoi(str);
 	old_count = atoi(ctx->options[OPT_THREADS]);
 
-	cry("Changing thread pool size: %d -> %d", old_count, new_count);
 	if (new_count > old_count) {
 		for (i = 0; i < new_count - old_count; i++)
 			start_thread((mg_thread_func_t) worker_loop, ctx);
