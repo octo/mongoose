@@ -2362,32 +2362,36 @@ read_request(int fd, SOCKET sock, SSL *ssl, char *buf, int bufsiz, int *nread)
  * Return 0 if index file has been found, -1 if not found
  */
 static bool_t
-send_index_file(struct mg_connection *conn,
-		char *buf, size_t buf_len, struct stat *stp)
+substitute_index_file(struct mg_connection *conn,
+		char *path, size_t path_len, struct stat *stp)
 {
 	const char	*s;
+	struct stat	st;
 	size_t		len, n;
+	bool_t		found;
 
-	n = strlen(buf);
-	buf[n] = DIRSEP;
+	n = strlen(path);
+	path[n] = DIRSEP;
+	found = FALSE;
 
 	mg_lock(conn->ctx);
 	s = conn->ctx->options[OPT_INDEX_FILES];
 	FOR_EACH_WORD_IN_LIST(s, len) {
-		if (len > buf_len - n - 1)
+		if (len > path_len - n - 1)
 			continue;
-		(void) mg_strlcpy(buf + n + 1, s, len + 1);
-		if (stat(buf, stp) == 0) {
-			send_file(conn, buf, stp);
-			mg_unlock(conn->ctx);
-			return (TRUE);
+		(void) mg_strlcpy(path + n + 1, s, len + 1);
+		if (stat(path, &st) == 0) {
+			*stp = st;
+			found = TRUE;
+			break;
 		}
 	}
 	mg_unlock(conn->ctx);
 
-	buf[n] = '\0';
+	if (found == FALSE)
+		path[n] = '\0';
 
-	return (FALSE);
+	return (found);
 }
 
 static void
@@ -2997,10 +3001,9 @@ analyze_request(struct mg_connection *conn)
 		(void) mg_printf(conn,
 		    "HTTP/1.1 301 Moved Permanently\r\n"
 		    "Location: %s/\r\n\r\n", uri);
-	} else if (S_ISDIR(st.st_mode)) {
-	       	if (send_index_file(conn, path, sizeof(path), &st)) {
-			/* do nothing */
-		} else if (is_true(conn->ctx->options[OPT_DIR_LIST])) {
+	} else if (S_ISDIR(st.st_mode) &&
+	    substitute_index_file(conn, path, sizeof(path), &st) == FALSE) {
+		if (is_true(conn->ctx->options[OPT_DIR_LIST])) {
 			send_directory(conn, path);
 		} else {
 			send_error(conn, 403, "Directory Listing Denied",

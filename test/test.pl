@@ -15,6 +15,7 @@ my $pid = undef;
 my $num_requests;
 my $root = 'test';
 my $dir_separator = on_windows() ? '\\' : '/';
+my $copy_cmd = on_windows() ? 'copy' : 'cp';
 my $test_dir_uri = "test_dir";
 my $test_dir = $root . $dir_separator. $test_dir_uri;
 my $alias = "/aliased=/etc/,/ta=$test_dir";
@@ -187,6 +188,12 @@ o("GET /not-exist HTTP/1.0\r\n\n", 'HTTP/1.1 404', 'Not existent file');
 o("GET /hello.txt HTTP/1.1\n\nGET /hello.txt HTTP/1.0\n\n",
 	'HTTP/1.1 200.+keep-alive.+HTTP/1.1 200.+close',
 	'Request pipelining', 2);
+mkdir $test_dir . $dir_separator . 'x';
+my $path = $test_dir . $dir_separator . 'x' . $dir_separator . 'index.cgi';
+write_file($path, read_file($root . $dir_separator . 'env.cgi'));
+chmod 0755, $path;
+o("GET /$test_dir_uri/x/ HTTP/1.0\n\n", "Content-Type: text/html\r\n\r\n",
+		'index.cgi execution');
 
 my $mime_types = {
 	html => 'text/html',
