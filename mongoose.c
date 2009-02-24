@@ -267,17 +267,14 @@ enum mg_option_index {
 	OPT_CGI_INTERPRETER, OPT_SSI_EXTENSIONS, OPT_AUTH_DOMAIN,
 	OPT_AUTH_GPASSWD, OPT_AUTH_PUT, OPT_ACCESS_LOG, OPT_ERROR_LOG,
 	OPT_SSL_CERTIFICATE, OPT_ALIASES, OPT_ACL, OPT_UID,
-	OPT_PROTECT, OPT_SERVICE, OPT_HIDE, OPT_ADMIN_URI, OPT_THREADS,
+	OPT_PROTECT, OPT_SERVICE, OPT_HIDE, OPT_ADMIN_URI, OPT_MAX_THREADS,
 	NUM_OPTIONS
 };
 
 struct socket {
 	SOCKET		sock;		/* Listening socket		*/
 	struct usa	usa;		/* Socket address		*/
-
-	unsigned int	flags;		/* Flags			*/
-#define	FLAG_SSL	1
-#define	FLAG_TERMINATE	2
+	bool_t		is_ssl;		/* Is socket SSL-ed		*/
 };
 
 /*
@@ -289,23 +286,6 @@ struct callback {
 	bool_t		is_auth;	/* func is auth checker		*/
 	int		status_code;	/* error code to handle		*/
 	void		*user_data;	/* opaque user data		*/
-};
-
-/*
- * Socket pool.
- * Master thread to enqueue accepted sockets by means of put_socket() function.
- * Worker threads grab sockets from the queue using get_socket() function.
- */
-struct socket_pool {
-	struct socket	sockets[20];	/* Array of sockets to process	*/
-
-	int		size;		/* Ringbuffer pointers		*/
-	int		head;
-	int		tail;
-
-	pthread_mutex_t	mutex;
-	pthread_cond_t	put_cond;
-	pthread_cond_t	get_cond;
 };
 
 /*
@@ -326,7 +306,9 @@ struct mg_context {
 
 	char	*options[NUM_OPTIONS];	/* Configured opions		*/
 	pthread_mutex_t	mutex;		/* Option setter/getter guard	*/
-	struct socket_pool socket_pool;	/* Socket pool			*/
+
+	int		num_threads;	/* Number of spawned threads	*/
+	pthread_cond_t	cond;		/* Condition var		*/
 
 	mg_spcb_t	ssl_password_callback;
 };
@@ -1023,86 +1005,6 @@ mg_unlock(struct mg_context *ctx)
 	if (pthread_mutex_unlock(&ctx->mutex) != 0)
 		cry("pthread_mutex_unlock: %s", strerror(ERRNO));
 }
-
-static int
-get_pool_space(const struct socket_pool *pool)
-{
-	return (pool->size - (pool->head - pool->tail));
-}
-
-static void
-init_socket_pool(struct socket_pool *pool)
-{
-	pool->size = (int) ARRAY_SIZE(pool->sockets);
-	pool->head = pool->tail = 0;
-
-	pthread_mutex_init(&pool->mutex, NULL);
-	pthread_cond_init(&pool->put_cond, NULL);
-	pthread_cond_init(&pool->get_cond, NULL);
-}
-
-static void
-destroy_socket_pool(struct socket_pool *pool)
-{
-	int	i;
-
-	pthread_mutex_lock(&pool->mutex);
-	for (i = 0; i < get_pool_space(pool); i++)
-		(void) closesocket(pool->sockets[i].sock);
-	pthread_mutex_unlock(&pool->mutex);
-
-	/*
-	 * TODO: all threads in a thread pool are blocked on pool->mutex.
-	 * Before destroying the mutex, send a termination signal to all
-	 * of these threads, and let them exit. Only after that destroy
-	 * the mutex.
-	 */
-
-	pthread_mutex_destroy(&pool->mutex);
-	pthread_cond_destroy(&pool->put_cond);
-	pthread_cond_destroy(&pool->get_cond);
-}
-
-/*
- * Put socket into the pool
- */
-static void
-put_socket(struct socket_pool *pool, const struct socket *sp)
-{
-	(void) pthread_mutex_lock(&pool->mutex);
-
-	while (get_pool_space(pool) == 0)
-		pthread_cond_wait(&pool->put_cond, &pool->mutex);
-
-	pool->sockets[pool->head++ % pool->size] = *sp;
-
-	pthread_cond_signal(&pool->get_cond);
-	pthread_mutex_unlock(&pool->mutex);
-}
-
-/*
- * Get index of the socket to process
- */
-static void
-get_socket(struct socket_pool *pool, struct socket *sp)
-{
-	pthread_mutex_lock(&pool->mutex);
-
-	while (get_pool_space(pool) == pool->size)
-		pthread_cond_wait(&pool->get_cond, &pool->mutex);
-
-	*sp = pool->sockets[pool->tail++];
-
-	/* Wrap pointers */
-	if (pool->tail  == pool->size) {
-		pool->head -= pool->size;
-		pool->tail = 0;
-	}
-
-	pthread_cond_signal(&pool->put_cond);
-	pthread_mutex_unlock(&pool->mutex);
-}
-
 
 /*
  * Write data to the IO channel - opened file descriptor, socket or SSL
@@ -2144,7 +2046,7 @@ send_directory(struct mg_connection *conn, const char *dir)
 	    "HTTP/1.1 200 OK\r\n"
 	    "Connection: close\r\n"
 	    "Content-Type: text/html; charset=utf-8\r\n\r\n");
-	
+
 	sort_direction = conn->request_info.query_string != NULL &&
 	    conn->request_info.query_string[1] == 'd' ? 'a' : 'd';
 
@@ -2161,7 +2063,7 @@ send_directory(struct mg_connection *conn, const char *dir)
 			entries = (struct de *) realloc(entries,
 			    arr_size * sizeof(entries[0]));
 		}
-		
+
 		if (entries == NULL) {
 			send_error(conn, 500, "Cannot open directory",
 			    "%s", "Error: cannot allocate memory");
@@ -2170,7 +2072,7 @@ send_directory(struct mg_connection *conn, const char *dir)
 
 		(void) mg_snprintf(path, sizeof(path), "%s%c%s",
 		    dir, DIRSEP, dp->d_name);
-		
+
 		(void) stat(path, &entries[num_entries].st);
 		entries[num_entries].conn = conn;
 		entries[num_entries].file_name = mg_strdup(dp->d_name);
@@ -2188,12 +2090,12 @@ send_directory(struct mg_connection *conn, const char *dir)
 	    "<tr><td colspan=\"3\"><hr></td></tr>",
 	    conn->request_info.uri, conn->request_info.uri,
 	    sort_direction, sort_direction, sort_direction);
-	
+
 	/* Print first entry - link to a parent directory */
 	conn->num_bytes_sent += mg_printf(conn,
 	    "<tr><td><a href=\"%s%s\">%s</a></td>"
 	    "<td>&nbsp;%s</td><td>&nbsp;&nbsp;%s</td></tr>\n",
-	    conn->request_info.uri, "..", "Parent directory", "-", "-");	
+	    conn->request_info.uri, "..", "Parent directory", "-", "-");
 
 	/* Sort and print directory entries */
 	qsort(entries, num_entries, sizeof(entries[0]), compare_dir_entries);
@@ -3047,13 +2949,13 @@ set_ports_option(struct mg_context *ctx, const char *p)
 {
 	SOCKET	sock;
 	size_t	len;
-	int	flags, port;
+	int	is_ssl, port;
 
 	close_all_listening_sockets(ctx);
 
 	FOR_EACH_WORD_IN_LIST(p, len) {
 
-		flags	= p[len - 1] == 's' ? FLAG_SSL : 0;
+		is_ssl	= p[len - 1] == 's' ? TRUE : FALSE;
 		port	= atoi(p);
 
 		if (ctx->num_listeners >=
@@ -3063,14 +2965,14 @@ set_ports_option(struct mg_context *ctx, const char *p)
 		} else if ((sock = mg_open_listening_port(port)) == -1) {
 			cry("cannot open port %d", port);
 			return (FALSE);
-		} else if (flags == FLAG_SSL && ctx->ssl_ctx == NULL) {
+		} else if (is_ssl == TRUE && ctx->ssl_ctx == NULL) {
 			(void) closesocket(sock);
 			cry("cannot add SSL socket, "
 			    "please specify certificate file");
 			return (FALSE);
 		} else {
 			ctx->listeners[ctx->num_listeners].sock = sock;
-			ctx->listeners[ctx->num_listeners].flags = flags;
+			ctx->listeners[ctx->num_listeners].is_ssl = is_ssl;
 			ctx->num_listeners++;
 		}
 	}
@@ -3205,7 +3107,7 @@ mg_fini(struct mg_context *ctx)
 
 	/* TODO: free SSL context */
 	(void) pthread_mutex_destroy(&ctx->mutex);
-	destroy_socket_pool(&ctx->socket_pool);
+	(void) pthread_cond_destroy(&ctx->cond);
 
 	free(ctx);
 }
@@ -3395,35 +3297,6 @@ admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
 	(void) mg_printf(conn, "%s", "</table></body></html>");
 }
 
-static void
-terminate_one_thread(struct mg_context *ctx)
-{
-	struct socket fake;
-
-	fake.flags = FLAG_TERMINATE;
-	put_socket(&ctx->socket_pool, &fake);
-}
-
-static void worker_loop(struct mg_context *ctx);
-static bool_t
-set_threads_option(struct mg_context *ctx, const char *str)
-{
-	int	i, old_count, new_count;
-
-	new_count = atoi(str);
-	old_count = atoi(ctx->options[OPT_THREADS]);
-
-	if (new_count > old_count) {
-		for (i = 0; i < new_count - old_count; i++)
-			start_thread((mg_thread_func_t) worker_loop, ctx);
-	} else {
-		for (i = 0; i < old_count - new_count; i++)
-			terminate_one_thread(ctx);
-	}
-
-	return (TRUE);
-}
-
 static bool_t
 set_admin_uri_option(struct mg_context *ctx, const char *uri)
 {
@@ -3458,7 +3331,7 @@ static const struct mg_option known_options[] = {
 	{"aliases", "Path=URI mappings", NULL},
 	{"admin_uri", "Administration page URI", NULL},
 	{"acl", "\tAllow/deny IP addresses/subnets", NULL},
-	{"threads", "Thread pool size", "23"},
+	{"max_threads", "Maximum simultaneous threads to spawn", "100"},
 	{NULL, NULL, NULL}
 };
 
@@ -3492,7 +3365,7 @@ static const struct option_setter {
 	{OPT_ALIASES,		NULL},
 	{OPT_ADMIN_URI,		&set_admin_uri_option},
 	{OPT_ACL,		NULL},
-	{OPT_THREADS,		set_threads_option},
+	{OPT_MAX_THREADS,	NULL},
 	{-1,			NULL}
 };
 
@@ -3643,6 +3516,10 @@ process_new_connection(struct mg_connection *conn)
 	char	buf[MAX_REQUEST_SIZE];
 	int	request_len, nread;
 
+	pthread_mutex_lock(&conn->ctx->mutex);
+	conn->ctx->num_threads++;
+	pthread_mutex_unlock(&conn->ctx->mutex);
+
 	nread = 0;
 	do {
 		/* If next request is not pipelined, read it in */
@@ -3686,59 +3563,52 @@ process_new_connection(struct mg_connection *conn)
 		}
 
 	} while (conn->keep_alive);
+
+	pthread_mutex_lock(&conn->ctx->mutex);
+	conn->ctx->num_threads--;
+	assert(conn->ctx->num_threads >= 0);
+	pthread_cond_signal(&conn->ctx->cond);
+	pthread_mutex_unlock(&conn->ctx->mutex);
 }
 
 static void
-accept_new_connection(const struct socket *listener, struct mg_context *ctx)
+accept_new_connection(const struct socket *l, struct mg_context *ctx)
 {
-	struct socket	rem;
+	struct mg_connection	*conn = NULL;
+	bool_t			ok = FALSE;
 
-	rem.usa.len = sizeof(rem.usa.u.sin);
+	pthread_mutex_lock(&ctx->mutex);
+	while (ctx->num_threads > atoi(ctx->options[OPT_MAX_THREADS]))
+		(void) pthread_cond_wait(&ctx->cond, &ctx->mutex);
+	pthread_mutex_unlock(&ctx->mutex);
 
-	if ((rem.sock = accept(listener->sock,
-	    &rem.usa.u.sa, &rem.usa.len)) == -1) {
+	if ((conn = (struct mg_connection*) calloc(1, sizeof(*conn))) == NULL) {
+		cry("Cannot allocate new connection");
+	} else if ((conn->rsa.len = sizeof(conn->rsa.u.sin)) <= 0) {
+		/* Never ever happens. */
+		abort();
+	} else if ((conn->sock = accept(l->sock,
+	    &conn->rsa.u.sa, &conn->rsa.len)) == -1) {
 		cry("accept: %d", ERRNO);
-	} else if (!check_acl(ctx, &rem.usa)) {
-		(void) closesocket(rem.sock);
-		cry("%s: denied by ACL", inet_ntoa(rem.usa.u.sin.sin_addr));
+	} else if (!check_acl(ctx, &conn->rsa)) {
+		cry("%s is not allowed to connect",
+		    inet_ntoa(conn->rsa.u.sin.sin_addr));
+	} else if (l->is_ssl && (conn->ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
+		cry("%s: SSL_new: %s", __func__, strerror(ERRNO));
+	} else if (l->is_ssl && SSL_set_fd(conn->ssl, conn->sock) != 1) {
+		cry("%s: SSL_set_fd: %s", __func__, strerror(ERRNO));
+	} else if (l->is_ssl && SSL_accept(conn->ssl) != 1) {
+		cry("%s: SSL handshake failed", __func__);
 	} else {
-		rem.flags = listener->flags;
-		put_socket(&ctx->socket_pool, &rem);
+		conn->ctx = ctx;
+		conn->birth_time = time(NULL);
+		if (start_thread((mg_thread_func_t)
+		    process_new_connection, conn) == 0)
+			ok = TRUE;
 	}
-}
 
-static void
-worker_loop(struct mg_context *ctx)
-{
-	struct mg_connection	conn;
-	struct socket		rem;
-	bool_t			ssl;
-
-	for (;;) {
-		get_socket(&ctx->socket_pool, &rem);
-
-		if (rem.flags & FLAG_TERMINATE)
-			break;
-
-		conn.sock = rem.sock;
-		conn.rsa = rem.usa;
-		conn.ctx = ctx;
-		conn.birth_time = time(NULL);
-		conn.ssl = NULL;
-		conn.free_post_data = conn.keep_alive = FALSE;
-
-		ssl = rem.flags & FLAG_SSL;
-		if (ssl && (conn.ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
-			cry("%s: SSL_new: %s", __func__, strerror(ERRNO));
-		} else if (ssl && SSL_set_fd(conn.ssl, conn.sock) != 1) {
-			cry("%s: SSL_set_fd: %s", __func__, strerror(ERRNO));
-		} else if (ssl && SSL_accept(conn.ssl) != 1) {
-			cry("%s: SSL handshake failed", __func__);
-		} else {
-			process_new_connection(&conn);
-		}
-		close_connection(&conn);
-	}
+	if (conn != NULL && ok == FALSE)
+		close_connection(conn);
 }
 
 static void
@@ -3826,13 +3696,9 @@ mg_start(void)
 	{WSADATA data;	WSAStartup(MAKEWORD(2,2), &data);}
 #endif /* _WIN32 */
 
-	/* Start worker threads */
-	init_socket_pool(&ctx->socket_pool);
-	for (i = 0; i < atoi(ctx->options[OPT_THREADS]); i++)
-		start_thread((mg_thread_func_t) worker_loop, ctx);
-
 	/* Start master (listening) thread */
 	(void) pthread_mutex_init(&ctx->mutex, NULL);
+	(void) pthread_cond_init(&ctx->cond, NULL);
 	start_thread((mg_thread_func_t) listening_loop, ctx);
 
 	return (ctx);
