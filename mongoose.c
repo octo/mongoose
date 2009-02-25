@@ -3569,13 +3569,15 @@ process_new_connection(struct mg_connection *conn)
 	assert(conn->ctx->num_threads >= 0);
 	pthread_cond_signal(&conn->ctx->cond);
 	pthread_mutex_unlock(&conn->ctx->mutex);
+
+	close_connection(conn);
 }
 
 static void
 accept_new_connection(const struct socket *l, struct mg_context *ctx)
 {
-	struct mg_connection	*conn = NULL;
-	bool_t			ok = FALSE;
+	struct mg_connection	*conn;
+	bool_t			thread_started = FALSE;
 
 	pthread_mutex_lock(&ctx->mutex);
 	while (ctx->num_threads > atoi(ctx->options[OPT_MAX_THREADS]))
@@ -3584,10 +3586,14 @@ accept_new_connection(const struct socket *l, struct mg_context *ctx)
 
 	if ((conn = (struct mg_connection*) calloc(1, sizeof(*conn))) == NULL) {
 		cry("Cannot allocate new connection");
-	} else if ((conn->rsa.len = sizeof(conn->rsa.u.sin)) <= 0) {
-		/* Never ever happens. */
-		abort();
-	} else if ((conn->sock = accept(l->sock,
+		return;
+	}
+
+	conn->rsa.len = sizeof(conn->rsa.u.sin);
+	conn->ctx = ctx;
+	conn->birth_time = time(NULL);
+
+	if ((conn->sock = accept(l->sock,
 	    &conn->rsa.u.sa, &conn->rsa.len)) == -1) {
 		cry("accept: %d", ERRNO);
 	} else if (!check_acl(ctx, &conn->rsa)) {
@@ -3599,15 +3605,12 @@ accept_new_connection(const struct socket *l, struct mg_context *ctx)
 		cry("%s: SSL_set_fd: %s", __func__, strerror(ERRNO));
 	} else if (l->is_ssl && SSL_accept(conn->ssl) != 1) {
 		cry("%s: SSL handshake failed", __func__);
-	} else {
-		conn->ctx = ctx;
-		conn->birth_time = time(NULL);
-		if (start_thread((mg_thread_func_t)
-		    process_new_connection, conn) == 0)
-			ok = TRUE;
+	} else if (start_thread((mg_thread_func_t)
+	    process_new_connection, conn) == 0) {
+		thread_started = TRUE;
 	}
 
-	if (conn != NULL && ok == FALSE)
+	if (thread_started == FALSE)
 		close_connection(conn);
 }
 
