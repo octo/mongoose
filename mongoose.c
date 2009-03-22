@@ -1156,9 +1156,9 @@ get_var(const char *name, const char *buf, size_t buf_len)
 				s = e;
 
 			/* Try to allocate the buffer */
-			len = s - p + 1;
-			if ((val = malloc(len)) != NULL)
-				(void) url_decode(p, len, val, len, TRUE);
+			len = s - p;
+			if ((val = malloc(len + 1)) != NULL)
+				(void) url_decode(p, len, val, len + 1, TRUE);
 			break;
 		}
 

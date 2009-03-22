@@ -22,10 +22,12 @@ my $alias = "/aliased=/etc/,/ta=$test_dir";
 my $config = 'mongoose.conf';
 my $exe = '.' . $dir_separator . 'mongoose';
 my $embed_exe = '.' . $dir_separator . 'embed';
+my $unit_test_exe = '.' . $dir_separator . 'unit_test';
 my $exit_code = 0;
 
 my @files_to_delete = ('debug.log', 'access.log', $config, "$root/put.txt",
-	"$root/a+.txt", "$root/.htpasswd", "$root/binary_file", $embed_exe);
+	"$root/a+.txt", "$root/.htpasswd", "$root/binary_file",
+       	$embed_exe, $unit_test_exe);
 
 END {
 	unlink @files_to_delete;
@@ -146,6 +148,16 @@ o("GET /test/hello.txt HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'Loading config file');
 $port = $saved_port;
 unlink $config;
 kill_spawned_child();
+
+if (scalar(@ARGV) > 0 and $ARGV[0] eq 'embedded') {
+	do_embedded_test();
+	exit 0;
+} elsif (scalar(@ARGV) > 0 and $ARGV[0] eq 'unit') {
+	do_unit_test();
+	exit 0;
+}
+
+do_unit_test();
 
 # Spawn the server on port $port
 my $cmd = "$exe -ports $port -access_log access.log -error_log debug.log ".
@@ -384,6 +396,10 @@ sub do_embedded_test {
 		"a=b&my_var=foo&c=d", 'Value: \[foo\]', 'mg_get_var 5', 0);
 	o("POST /test_get_var HTTP/1.0\nContent-Length: 14\n\n".
 		"a=b&my_var=foo", 'Value: \[foo\]', 'mg_get_var 6', 0);
+	o("GET /test_get_var?a=one%2btwo&my_var=foo& HTTP/1.0\n\n",
+			'Value: \[foo\]', 'mg_get_var 7', 0);
+	o("GET /test_get_var?my_var=one%2btwo&b=two%2b HTTP/1.0\n\n",
+			'Value: \[one\+two\]', 'mg_get_var 8', 0);
 
 	# + in form data MUST be decoded to space	
 	o("POST /test_get_var HTTP/1.0\nContent-Length: 10\n\n".
@@ -416,6 +432,17 @@ sub do_embedded_test {
 		'200 OK', 'mg_protect_uri (joe)', 0);
 	
 	kill_spawned_child();
+}
+
+sub do_unit_test {
+	my $cmd = "cc -o $unit_test_exe $root/unit_test.c -I. -lpthread ";
+	if (on_windows()) {
+		$cmd = "cl $root/unit_test.c /I. /nologo ".
+			"/link /out:$unit_test_exe.exe ws2_32.lib ";
+	}
+	print $cmd, "\n";
+	system($cmd) == 0 or fail("Cannot compile unit test");
+	system($unit_test_exe) == 0 or fail("Unit test failed");
 }
 
 print "SUCCESS! All tests passed.\n";
