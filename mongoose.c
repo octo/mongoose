@@ -168,6 +168,7 @@ typedef int SOCKET;
 #define	MAX_CGI_ENVIR_VARS	64
 #define	MAX_REQUEST_SIZE	16384
 #define	MAX_LISTENING_SOCKETS	10
+#define	MAX_QUEUED_SOCKETS	10
 #define	MAX_CALLBACKS		20
 #define	ARRAY_SIZE(array)	(sizeof(array) / sizeof(array[0]))
 #define	UNKNOWN_CONTENT_LENGTH	((uint64_t) ~0ULL)
@@ -268,6 +269,7 @@ enum mg_option_index {
 	OPT_AUTH_GPASSWD, OPT_AUTH_PUT, OPT_ACCESS_LOG, OPT_ERROR_LOG,
 	OPT_SSL_CERTIFICATE, OPT_ALIASES, OPT_ACL, OPT_UID,
 	OPT_PROTECT, OPT_SERVICE, OPT_HIDE, OPT_ADMIN_URI, OPT_MAX_THREADS,
+	OPT_IDLE_TIME,
 	NUM_OPTIONS
 };
 
@@ -301,14 +303,21 @@ struct mg_context {
 	struct socket	listeners[MAX_LISTENING_SOCKETS];
 	int		num_listeners;
 
+	struct socket	accepted[MAX_QUEUED_SOCKETS];
+	int		num_accepted;
+
 	struct callback	callbacks[MAX_CALLBACKS];
 	int		num_callbacks;
 
 	char	*options[NUM_OPTIONS];	/* Configured opions		*/
-	pthread_mutex_t	mutex;		/* Option setter/getter guard	*/
+	pthread_mutex_t	opt_mutex;	/* Option setter/getter guard	*/
 
-	int		num_threads;	/* Number of spawned threads	*/
-	pthread_cond_t	cond;		/* Condition var		*/
+	int		max_threads;	/* Maximum number of threads	*/
+	int		num_active;	/* Number of active threads	*/
+	int		num_idle;	/* Number of idle threads	*/
+	pthread_mutex_t	thr_mutex;	/* Threading guard		*/
+	pthread_cond_t	new_conn_cond;	/* New connection condition 	*/
+	pthread_cond_t	new_thr_cond;	/* New thread condition 	*/
 
 	mg_spcb_t	ssl_password_callback;
 };
@@ -995,14 +1004,14 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 static void
 mg_lock(struct mg_context *ctx)
 {
-	if (pthread_mutex_lock(&ctx->mutex) != 0)
+	if (pthread_mutex_lock(&ctx->opt_mutex) != 0)
 		cry("pthread_mutex_lock: %s", strerror(ERRNO));
 }
 
 static void
 mg_unlock(struct mg_context *ctx)
 {
-	if (pthread_mutex_unlock(&ctx->mutex) != 0)
+	if (pthread_mutex_unlock(&ctx->opt_mutex) != 0)
 		cry("pthread_mutex_unlock: %s", strerror(ERRNO));
 }
 
@@ -3106,8 +3115,10 @@ mg_fini(struct mg_context *ctx)
 		(void) fclose(ctx->error_log);
 
 	/* TODO: free SSL context */
-	(void) pthread_mutex_destroy(&ctx->mutex);
-	(void) pthread_cond_destroy(&ctx->cond);
+	(void) pthread_mutex_destroy(&ctx->opt_mutex);
+	(void) pthread_mutex_destroy(&ctx->thr_mutex);
+	(void) pthread_cond_destroy(&ctx->new_conn_cond);
+	(void) pthread_cond_destroy(&ctx->new_thr_cond);
 
 	free(ctx);
 }
@@ -3244,6 +3255,13 @@ set_gpass_option(struct mg_context *ctx, const char *path)
 }
 #endif /* !NO_AUTH */
 
+static bool_t
+set_max_threads_option(struct mg_context *ctx, const char *str)
+{
+	ctx->max_threads = atoi(str);
+	return (TRUE);
+}
+
 static void
 admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
 		void *user_data)
@@ -3332,6 +3350,7 @@ static const struct mg_option known_options[] = {
 	{"admin_uri", "Administration page URI", NULL},
 	{"acl", "\tAllow/deny IP addresses/subnets", NULL},
 	{"max_threads", "Maximum simultaneous threads to spawn", "100"},
+	{"idle_time", "Seconds to wait before idle thread exits", "10"},
 	{NULL, NULL, NULL}
 };
 
@@ -3365,7 +3384,8 @@ static const struct option_setter {
 	{OPT_ALIASES,		NULL},
 	{OPT_ADMIN_URI,		&set_admin_uri_option},
 	{OPT_ACL,		NULL},
-	{OPT_MAX_THREADS,	NULL},
+	{OPT_MAX_THREADS,	&set_max_threads_option},
+	{OPT_IDLE_TIME,		NULL},
 	{-1,			NULL}
 };
 
@@ -3474,7 +3494,6 @@ close_connection(struct mg_connection *conn)
 	if (conn->sock != INVALID_SOCKET) {
 		close_socket_gracefully(conn->sock);
 	}
-	free(conn);
 }
 
 static void
@@ -3516,10 +3535,6 @@ process_new_connection(struct mg_connection *conn)
 	struct mg_request_info *ri = &conn->request_info;
 	char	buf[MAX_REQUEST_SIZE];
 	int	request_len, nread;
-
-	pthread_mutex_lock(&conn->ctx->mutex);
-	conn->ctx->num_threads++;
-	pthread_mutex_unlock(&conn->ctx->mutex);
 
 	nread = 0;
 	do {
@@ -3564,55 +3579,134 @@ process_new_connection(struct mg_connection *conn)
 		}
 
 	} while (conn->keep_alive);
+}
 
-	pthread_mutex_lock(&conn->ctx->mutex);
-	conn->ctx->num_threads--;
-	assert(conn->ctx->num_threads >= 0);
-	pthread_cond_signal(&conn->ctx->cond);
-	pthread_mutex_unlock(&conn->ctx->mutex);
+static void
+worker_loop(struct mg_context *ctx)
+{
+	struct mg_connection	conn;
+	struct timespec		ts;
+	bool_t			is_ssl;
 
-	close_connection(conn);
+	pthread_mutex_lock(&ctx->thr_mutex);
+	ctx->num_idle++;
+	pthread_cond_signal(&ctx->new_thr_cond);
+	pthread_mutex_unlock(&ctx->thr_mutex);
+
+	for (;;) {
+		(void) memset(&conn, 0, sizeof(conn));
+		pthread_mutex_lock(&ctx->thr_mutex);
+
+		ts.tv_nsec = 0;
+		ts.tv_sec = time(NULL) + atoi(ctx->options[OPT_IDLE_TIME]);
+
+		/* Wait until some socket is accepted by the master thread */
+		if (ctx->num_accepted == 0)
+			(void) pthread_cond_timedwait(
+			    &ctx->new_conn_cond, &ctx->thr_mutex, &ts);
+
+		/* Exit this thread if there are no accepted sockets */
+		if (ctx->num_accepted == 0) {
+			pthread_mutex_unlock(&ctx->thr_mutex);
+			break;
+		}
+
+		ctx->num_active++;
+		ctx->num_idle--;
+
+		assert(ctx->num_accepted > 0);
+		assert(ctx->num_idle >= 0);
+		assert(ctx->num_idle + ctx->num_active <= ctx->max_threads);
+
+		/* Copy data from the queue */
+		ctx->num_accepted--;
+		conn.sock = ctx->accepted[ctx->num_accepted].sock;
+		conn.rsa = ctx->accepted[ctx->num_accepted].usa;
+		is_ssl = ctx->accepted[ctx->num_accepted].is_ssl;
+
+		/* Everything is copied, now it is safe to release the mutex */
+		pthread_mutex_unlock(&ctx->thr_mutex);
+
+		/* Initialize the rest of attributes */
+		conn.ctx = ctx;
+		conn.birth_time = time(NULL);
+
+		if (is_ssl && (conn.ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
+			cry("%s: SSL_new: %s", __func__, strerror(ERRNO));
+		} else if (is_ssl && SSL_set_fd(conn.ssl, conn.sock) != 1) {
+			cry("%s: SSL_set_fd: %s", __func__, strerror(ERRNO));
+		} else if (is_ssl && SSL_accept(conn.ssl) != 1) {
+			cry("%s: SSL handshake failed", __func__);
+		} else {
+		    process_new_connection(&conn);
+		}
+
+		close_connection(&conn);
+
+		pthread_mutex_lock(&ctx->thr_mutex);
+		ctx->num_active--;
+		ctx->num_idle++;
+		assert(ctx->num_active >= 0);
+		assert(ctx->num_idle + ctx->num_active <= ctx->max_threads);
+		pthread_cond_signal(&ctx->new_thr_cond);
+		pthread_mutex_unlock(&ctx->thr_mutex);
+	}
+
+	pthread_mutex_lock(&ctx->thr_mutex);
+	ctx->num_idle--;
+	assert(ctx->num_idle >= 0);
+	pthread_cond_signal(&ctx->new_thr_cond);
+	pthread_mutex_unlock(&ctx->thr_mutex);
 }
 
 static void
 accept_new_connection(const struct socket *l, struct mg_context *ctx)
 {
-	struct mg_connection	*conn;
-	bool_t			thread_started = FALSE;
+	SOCKET		sock;
+	struct usa	rsa;
 
-	pthread_mutex_lock(&ctx->mutex);
-	while (ctx->num_threads > atoi(ctx->options[OPT_MAX_THREADS]))
-		(void) pthread_cond_wait(&ctx->cond, &ctx->mutex);
-	pthread_mutex_unlock(&ctx->mutex);
+	rsa.len = sizeof(rsa.u.sin);
 
-	if ((conn = (struct mg_connection*) calloc(1, sizeof(*conn))) == NULL) {
-		cry("Cannot allocate new connection");
-		return;
+	if ((sock = accept(l->sock, &rsa.u.sa, &rsa.len)) == INVALID_SOCKET) {
+		cry("%s: accept: %d", __func__, ERRNO);
+	} else if (!check_acl(ctx, &rsa)) {
+		cry("%s: %s is not allowed to connect",
+		    __func__, inet_ntoa(rsa.u.sin.sin_addr));
+		(void) closesocket(sock);
+	} else {
+		/*
+		 * Socket accepted. Put it into the queue for some
+		 * worker thread to grab later on.
+		 */
+		pthread_mutex_lock(&ctx->thr_mutex);
+
+		/* Wait if there is no space in the queue */
+		while (ctx->num_accepted >= (int) ARRAY_SIZE(ctx->accepted))
+			(void) pthread_cond_wait(
+			    &ctx->new_thr_cond, &ctx->thr_mutex);
+
+		ctx->accepted[ctx->num_accepted].sock = sock;
+		ctx->accepted[ctx->num_accepted].usa = rsa;
+		ctx->accepted[ctx->num_accepted].is_ssl = l->is_ssl;
+		ctx->num_accepted++;
+
+		pthread_cond_signal(&ctx->new_conn_cond);
+
+		/*
+		 * Wait if we need to start a new thread, and there are
+		 * already maximum possible started
+		 */
+		while (ctx->num_idle == 0 &&
+		    ctx->num_active == ctx->max_threads)
+			(void) pthread_cond_wait(
+			    &ctx->new_thr_cond, &ctx->thr_mutex);
+
+		/* Start a new thread if there are no idle threads */
+		if (ctx->num_idle == 0)
+			start_thread((mg_thread_func_t) worker_loop, ctx);
+
+		pthread_mutex_unlock(&ctx->thr_mutex);
 	}
-
-	conn->rsa.len = sizeof(conn->rsa.u.sin);
-	conn->ctx = ctx;
-	conn->birth_time = time(NULL);
-
-	if ((conn->sock = accept(l->sock,
-	    &conn->rsa.u.sa, &conn->rsa.len)) == -1) {
-		cry("accept: %d", ERRNO);
-	} else if (!check_acl(ctx, &conn->rsa)) {
-		cry("%s is not allowed to connect",
-		    inet_ntoa(conn->rsa.u.sin.sin_addr));
-	} else if (l->is_ssl && (conn->ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
-		cry("%s: SSL_new: %s", __func__, strerror(ERRNO));
-	} else if (l->is_ssl && SSL_set_fd(conn->ssl, conn->sock) != 1) {
-		cry("%s: SSL_set_fd: %s", __func__, strerror(ERRNO));
-	} else if (l->is_ssl && SSL_accept(conn->ssl) != 1) {
-		cry("%s: SSL handshake failed", __func__);
-	} else if (start_thread((mg_thread_func_t)
-	    process_new_connection, conn) == 0) {
-		thread_started = TRUE;
-	}
-
-	if (thread_started == FALSE)
-		close_connection(conn);
 }
 
 static void
@@ -3701,8 +3795,10 @@ mg_start(void)
 #endif /* _WIN32 */
 
 	/* Start master (listening) thread */
-	(void) pthread_mutex_init(&ctx->mutex, NULL);
-	(void) pthread_cond_init(&ctx->cond, NULL);
+	(void) pthread_mutex_init(&ctx->opt_mutex, NULL);
+	(void) pthread_mutex_init(&ctx->thr_mutex, NULL);
+	(void) pthread_cond_init(&ctx->new_conn_cond, NULL);
+	(void) pthread_cond_init(&ctx->new_thr_cond, NULL);
 	start_thread((mg_thread_func_t) listening_loop, ctx);
 
 	return (ctx);
