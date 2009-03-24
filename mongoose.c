@@ -356,15 +356,19 @@ struct mg_connection {
 static void
 cry(const char *fmt, ...)
 {
+	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 	FILE	*fp;
 	va_list	ap;
 
 	fp = error_log == NULL ? stderr : error_log;
+	pthread_mutex_lock(&mutex);
+
 	va_start(ap, fmt);
 	(void) vfprintf(fp, fmt, ap);
 	va_end(ap);
 
 	fputc('\n', fp);
+	pthread_mutex_unlock(&mutex);
 }
 
 const char *
@@ -3004,6 +3008,7 @@ log_header(const struct mg_connection *conn, const char *header, FILE *fp)
 static void
 log_access(const struct mg_connection *conn)
 {
+	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 	const struct mg_request_info *ri;
 	char		date[64];
 
@@ -3014,6 +3019,8 @@ log_access(const struct mg_connection *conn)
 			localtime(&conn->birth_time));
 
 	ri = &conn->request_info;
+
+	pthread_mutex_lock(&mutex);
 	(void) fprintf(conn->ctx->access_log,
 	    "%s - %s [%s %+05d] \"%s %s HTTP/%d.%d\" %d %llu",
 	    inet_ntoa(conn->rsa.u.sin.sin_addr),
@@ -3028,6 +3035,7 @@ log_access(const struct mg_connection *conn)
 	log_header(conn, "User-Agent", conn->ctx->access_log);
 	(void) fputc('\n', conn->ctx->access_log);
 	(void) fflush(conn->ctx->access_log);
+	pthread_mutex_unlock(&mutex);
 }
 
 static bool_t
