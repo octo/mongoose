@@ -3101,6 +3101,10 @@ mg_fini(struct mg_context *ctx)
 
 	close_all_listening_sockets(ctx);
 
+	/* Wait until all threads finish */
+	while (ctx->num_active > 0 && ctx->num_idle > 0)
+		pthread_cond_wait(&ctx->new_thr_cond, &ctx->thr_mutex);
+
 	for (i = 0; i < ctx->num_callbacks; i++)
 		if (ctx->callbacks[i].uri_regex != NULL)
 			free(ctx->callbacks[i].uri_regex);
