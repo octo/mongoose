@@ -666,13 +666,16 @@ pthread_mutex_unlock(pthread_mutex_t *mutex)
 static void
 fix_directory_separators(char *path)
 {
-	for (; *path != '\0'; path++) {
-		if (*path == '/')
-			*path = '\\';
-		if (*path == '\\')
-			while (path[1] == '\\' || path[1] == '/')
-				(void) memmove(path + 1,
-				    path + 2, strlen(path + 2) + 1);
+	int	i;
+	
+	for (i = 0; path[i] != '\0'; i++) {
+		if (path[i] == '/')
+			path[i] = '\\';
+		/* i > 0 check is to preserve UNC paths, \\server\file.txt */
+		if (path[i] == '\\' && i > 0)
+			while (path[i + 1] == '\\' || path[i + 1] == '/')
+				(void) memmove(path + i + 1,
+				    path + i + 2, strlen(path + i + 1));		
 	}
 }
 

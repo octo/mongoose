@@ -29,13 +29,38 @@ test_get_var(void)
 
 	for (i = 0; vars[i] != NULL; i++)
 		if (strcmp(vals[i], get_var(vars[i], post_buffer, buf_len)))
-			fail("get_var(%s)", vars[i]);
+			fail("%s(%s)", __func__, vars[i]);
 }
+
+#if defined(_WIN32)
+static void
+test_fix_directory_separators(void)
+{
+	const char	*in[] = {"\\\\server\\\\dir/file.txt",
+				"//\\///a", "c:/a//\\\\//////b", NULL};
+	const char 	*out[] = {"\\\\server\\dir\\file.txt", "\\\\a",
+				"c:\\a\\b"};
+	char		buf[FILENAME_MAX];
+	int		i;
+	
+	for (i = 0; in[i] != NULL; i++) {
+		mg_strlcpy(buf, in[i], sizeof(buf));
+		fix_directory_separators(buf);
+		if (strcmp(buf, out[i]) != 0)
+			fail("%s(%s): expected [%s], got [%s]",
+			    __func__, in[i], out[i], buf);
+	}
+}
+#else
+#define	test_fix_directory_separators()
+#endif /* _WIN32 */
+
 
 
 int main(int argc, char *argv[])
 {
 	test_get_var();
+	test_fix_directory_separators();
 
 	return (EXIT_SUCCESS);
 }
