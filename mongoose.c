@@ -3109,6 +3109,10 @@ mg_fini(struct mg_context *ctx)
 	/* Deallocate SSL context */
 	if (ctx->ssl_ctx)
 		SSL_CTX_free(ctx->ssl_ctx);
+		
+	/* Close control sockets */
+	(void) closesocket(ctx->ctl[0]);
+	(void) closesocket(ctx->ctl[1]);
 
 	(void) pthread_mutex_destroy(&ctx->opt_mutex);
 
