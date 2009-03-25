@@ -155,7 +155,6 @@ typedef struct DIR {
 #define	mg_mkdir(x, y)		mkdir(x, y)
 #define	mg_open(x, y, z)	open(x, y, z)
 #define	mg_remove(x)		remove(x)
-#define	mg_stat(x, y)		stat(x, y)
 #define	ERRNO			errno
 #define	INVALID_SOCKET		(-1)
 typedef int SOCKET;
@@ -262,6 +261,12 @@ struct usa {
 		struct sockaddr	sa;
 		struct sockaddr_in sin;
 	} u;
+};
+
+struct mgstat {
+	bool_t		is_directory;
+	uint64_t	st_size;
+	time_t		st_mtime;
 };
 
 /*
@@ -711,13 +716,23 @@ mg_open(const char *path, int flags, int mode)
 }
 
 static int
-mg_stat(const char *path, struct stat *stp)
+mg_stat(const char *path, struct mgstat *stp)
 {
-	wchar_t	wbuf[FILENAME_MAX];
+	struct	_stat64	st;
+	int		ok;
+	wchar_t		wbuf[FILENAME_MAX];
 
 	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
-
-	return (_wstat(wbuf, (struct _stat *) stp));
+	if (_wstat64(wbuf, &st) == 0) {
+		ok = 0;
+		stp->st_size = st.st_size;
+		stp->st_mtime = st.st_mtime;
+		stp->is_directory = S_ISDIR(st.st_mode);
+	} else {
+		ok = -1;
+	}
+	
+	return (ok);
 }
 
 static int
@@ -900,6 +915,24 @@ mg_mkdir(const char *path, int mode)
 }
 
 #else
+
+static int
+mg_stat(const char *path, struct mgstat *stp)
+{
+	struct stat	st;
+	int		ok;
+
+	if (stat(wbuf, &st)) {
+		ok = 0;
+		stp->st_size = st.st_size;
+		stp->st_mtime = st.st_mtime;
+		stp->is_directory = S_ISDIR(st.st_mode);
+	} else {
+		ok = -1;
+	}
+	
+	return (ok);
+}
 
 static void
 set_close_on_exec(int fd)
@@ -1723,7 +1756,7 @@ open_auth_file(struct mg_context *ctx, const char *path)
 {
 	char 		name[FILENAME_MAX];
 	const char	*p, *e;
-	struct stat	st;
+	struct mgstat	st;
 	FILE		*fp;
 
 	if (ctx->options[OPT_AUTH_GPASSWD] != NULL) {
@@ -1731,7 +1764,7 @@ open_auth_file(struct mg_context *ctx, const char *path)
 		if ((fp = fopen(ctx->options[OPT_AUTH_GPASSWD], "r")) == NULL)
 			cry("fopen(%s): %s",
 			    ctx->options[OPT_AUTH_GPASSWD], strerror(ERRNO));
-	} else if (!mg_stat(path, &st) && S_ISDIR(st.st_mode)) {
+	} else if (!mg_stat(path, &st) && st.is_directory) {
 		(void) mg_snprintf(name, sizeof(name), "%s%c%s",
 		    path, DIRSEP, PASSWORDS_FILE_NAME);
 		fp = fopen(name, "r");
@@ -1955,7 +1988,7 @@ does_client_want_keep_alive(const struct mg_connection *conn)
 struct de {
 	struct mg_connection	*conn;
 	char			*file_name;
-	struct stat		st;
+	struct mgstat		st;
 };
 
 static void
@@ -1963,7 +1996,7 @@ print_dir_entry(struct de *de)
 {
 	char		size[64], mod[64];
 
-	if (S_ISDIR(de->st.st_mode)) {
+	if (de->st.is_directory) {
 		(void) mg_snprintf(size, sizeof(size), "%s", "[DIRECTORY]");
 	} else {
 		if (de->st.st_size < 1024)
@@ -1985,7 +2018,7 @@ print_dir_entry(struct de *de)
 	    "<tr><td><a href=\"%s%s\">%s%s</a></td>"
 	    "<td>&nbsp;%s</td><td>&nbsp;&nbsp;%s</td></tr>\n",
 	    de->conn->request_info.uri, de->file_name, de->file_name,
-	    S_ISDIR(de->st.st_mode) ? "/" : "", mod, size);
+	    de->st.is_directory ? "/" : "", mod, size);
 }
 
 static int
@@ -1998,9 +2031,9 @@ compare_dir_entries(const void *p1, const void *p2)
 	if (query_string == NULL)
 		query_string = "na";
 
-	if (S_ISDIR(a->st.st_mode) && !S_ISDIR(b->st.st_mode)) {
+	if (a->st.is_directory && !b->st.is_directory) {
 		return (-1);  /* Always put directories on top */
-	} else if (!S_ISDIR(a->st.st_mode) && S_ISDIR(b->st.st_mode)) {
+	} else if (!a->st.is_directory && b->st.is_directory) {
 		return (1);   /* Always put directories on top */
 	} else if (*query_string == 'n') {
 		cmp_result = strcmp(a->file_name, b->file_name);
@@ -2061,7 +2094,7 @@ send_directory(struct mg_connection *conn, const char *dir)
 		(void) mg_snprintf(path, sizeof(path), "%s%c%s",
 		    dir, DIRSEP, dp->d_name);
 
-		(void) stat(path, &entries[num_entries].st);
+		(void) mg_stat(path, &entries[num_entries].st);
 		entries[num_entries].conn = conn;
 		entries[num_entries].file_name = mg_strdup(dp->d_name);
 		num_entries++;
@@ -2118,7 +2151,7 @@ send_opened_file_stream(struct mg_connection *conn, int fd, uint64_t len)
 }
 
 static void
-send_file(struct mg_connection *conn, const char *path, struct stat *stp)
+send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 {
 	char		date[64], lm[64], etag[64], range[64];
 	const char	*fmt = "%a, %d %b %Y %H:%M:%S GMT", *msg = "OK";
@@ -2253,10 +2286,10 @@ read_request(int fd, SOCKET sock, SSL *ssl, char *buf, int bufsiz, int *nread)
  */
 static bool_t
 substitute_index_file(struct mg_connection *conn,
-		char *path, size_t path_len, struct stat *stp)
+		char *path, size_t path_len, struct mgstat *stp)
 {
 	const char	*s;
-	struct stat	st;
+	struct mgstat	st;
 	size_t		len, n;
 	bool_t		found;
 
@@ -2270,7 +2303,7 @@ substitute_index_file(struct mg_connection *conn,
 		if (len > path_len - n - 1)
 			continue;
 		(void) mg_strlcpy(path + n + 1, s, len + 1);
-		if (stat(path, &st) == 0) {
+		if (mg_stat(path, &st) == 0) {
 			*stp = st;
 			found = TRUE;
 			break;
@@ -2331,7 +2364,7 @@ mg_protect_uri(struct mg_context *ctx, const char *uri_regex,
 }
 
 static int
-not_modified(const struct mg_connection *conn, const struct stat *stp)
+not_modified(const struct mg_connection *conn, const struct mgstat *stp)
 {
 	const char *ims = mg_get_header(conn, "If-Modified-Since");
 	return (ims != NULL && stp->st_mtime < date_to_epoch(ims));
@@ -2652,7 +2685,7 @@ put_dir(const char *path)
 {
 	char		buf[FILENAME_MAX];
 	const char	*s, *p;
-	struct stat	st;
+	struct mgstat	st;
 	size_t		len;
 
 	for (s = p = path + 2; (p = strchr(s, '/')) != NULL; s = ++p) {
@@ -2676,7 +2709,7 @@ put_dir(const char *path)
 static void
 put_file(struct mg_connection *conn, const char *path)
 {
-	struct stat	st;
+	struct mgstat	st;
 	int		rc, fd;
 
 	conn->request_info.status_code = mg_stat(path, &st) == 0 ? 200 : 201;
@@ -2846,7 +2879,7 @@ analyze_request(struct mg_connection *conn)
 {
 	struct mg_request_info *ri = &conn->request_info;
 	char			path[FILENAME_MAX], *uri = ri->uri;
-	struct stat		st;
+	struct mgstat		st;
 	const struct callback	*cb;
 
 	if ((conn->request_info.query_string = strchr(uri, '?')) != NULL)
@@ -2888,11 +2921,11 @@ analyze_request(struct mg_connection *conn)
 #endif /* NO_AUTH */
 	if (mg_stat(path, &st) != 0) {
 		send_error(conn, 404, "Not Found", "%s", "");
-	} else if (S_ISDIR(st.st_mode) && uri[strlen(uri) - 1] != '/') {
+	} else if (st.is_directory && uri[strlen(uri) - 1] != '/') {
 		(void) mg_printf(conn,
 		    "HTTP/1.1 301 Moved Permanently\r\n"
 		    "Location: %s/\r\n\r\n", uri);
-	} else if (S_ISDIR(st.st_mode) &&
+	} else if (st.is_directory &&
 	    substitute_index_file(conn, path, sizeof(path), &st) == FALSE) {
 		if (is_true(conn->ctx->options[OPT_DIR_LIST])) {
 			send_directory(conn, path);
