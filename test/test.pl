@@ -438,8 +438,9 @@ sub do_unit_test {
 	my $cmd = "cc -o $unit_test_exe $root/unit_test.c ".
 		"-I. -DNO_SSL -lpthread ";
 	if (on_windows()) {
+		$unit_test_exe .= '.exe';
 		$cmd = "cl $root/unit_test.c /I. /nologo ".
-			"/link /out:$unit_test_exe.exe ws2_32.lib ";
+			"/link /out:$unit_test_exe ws2_32.lib ";
 	}
 	print $cmd, "\n";
 	system($cmd) == 0 or fail("Cannot compile unit test");
