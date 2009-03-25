@@ -98,13 +98,15 @@
 #define	open(x, y, z)		_open(x, y, z)
 #define	lseek(x, y, z)		_lseek(x, y, z)
 #define	close(x)		_close(x)
+#define	sleep(x)		Sleep((x) * 1000)
+#define	lock_file(x)		_lock_file(x)
+#define	unlock_file(x)		_unlock_file(x)
 
 #if !defined(fileno)
 #define	fileno(x)		_fileno(x)
 #endif /* !fileno MINGW #defines fileno */
 
 typedef HANDLE pthread_mutex_t;
-typedef HANDLE pthread_cond_t;
 
 #if !defined(S_ISDIR)
 #define S_ISDIR(x)		((x) & _S_IFDIR)
@@ -356,19 +358,20 @@ struct mg_connection {
 static void
 cry(const char *fmt, ...)
 {
-	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 	FILE	*fp;
 	va_list	ap;
 
 	fp = error_log == NULL ? stderr : error_log;
-	pthread_mutex_lock(&mutex);
+
+	lock_file(fp);
 
 	va_start(ap, fmt);
 	(void) vfprintf(fp, fmt, ap);
 	va_end(ap);
 
 	fputc('\n', fp);
-	pthread_mutex_unlock(&mutex);
+
+	unlock_file(fp);
 }
 
 const char *
@@ -653,34 +656,6 @@ static int
 pthread_mutex_unlock(pthread_mutex_t *mutex)
 {
 	return (ReleaseMutex(*mutex) == 0 ? -1 : 0);
-}
-
-static int
-pthread_cond_init(pthread_cond_t *cv, const void *unused)
-{
-	unused = NULL;
-	*cv = CreateEvent(NULL, FALSE, FALSE, NULL);
-	return (*cv == NULL ? -1 : 0);
-}
-
-static int
-pthread_cond_wait(pthread_cond_t *cv, pthread_mutex_t *mutex)
-{
-	SignalObjectAndWait(*mutex, *cv, INFINITE, FALSE);
-	WaitForSingleObject(*mutex, INFINITE);
-	return (0);
-}
-
-static int
-pthread_cond_signal(pthread_cond_t *cv)
-{
-	return (SetEvent(*cv) == 0 ? -1 : 0);
-}
-
-static int
-pthread_cond_destroy(pthread_cond_t *cv)
-{
-	return (CloseHandle(*cv) == 0 ? -1 : 0);
 }
 
 static void
@@ -3009,7 +2984,6 @@ log_header(const struct mg_connection *conn, const char *header, FILE *fp)
 static void
 log_access(const struct mg_connection *conn)
 {
-	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 	const struct mg_request_info *ri;
 	char		date[64];
 
@@ -3021,7 +2995,8 @@ log_access(const struct mg_connection *conn)
 
 	ri = &conn->request_info;
 
-	pthread_mutex_lock(&mutex);
+	lock_file(conn->ctx->access_log);
+
 	(void) fprintf(conn->ctx->access_log,
 	    "%s - %s [%s %+05d] \"%s %s HTTP/%d.%d\" %d %llu",
 	    inet_ntoa(conn->client.usa.u.sin.sin_addr),
@@ -3036,7 +3011,8 @@ log_access(const struct mg_connection *conn)
 	log_header(conn, "User-Agent", conn->ctx->access_log);
 	(void) fputc('\n', conn->ctx->access_log);
 	(void) fflush(conn->ctx->access_log);
-	pthread_mutex_unlock(&mutex);
+
+	unlock_file(conn->ctx->access_log);
 }
 
 static bool_t
@@ -3619,7 +3595,7 @@ worker_loop(struct mg_context *ctx)
 
 		if (select(ctx->ctl[1] + 1, &fdset, NULL, NULL, &tv) != 1) {
 			conn.client.sock = INVALID_SOCKET;
-		} else if (recv(ctx->ctl[1], &conn.client,
+		} else if (recv(ctx->ctl[1], (void *) &conn.client,
 		    sizeof(conn.client), 0) != sizeof(conn.client)) {
 			cry("Error reading from control socket: %d", ERRNO);
 			conn.client.sock = INVALID_SOCKET;
@@ -3690,7 +3666,7 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 
 		/* Send accepted socket to some of the worker threads */
 		accepted.is_ssl = listener->is_ssl;
-		if (send(ctx->ctl[0], &accepted,
+		if (send(ctx->ctl[0], (void *) &accepted,
 		    sizeof(accepted), 0) != sizeof(accepted)) {
 			cry("%s control socket error: %s",
 			    __func__, strerror(errno));
@@ -3750,7 +3726,7 @@ mg_stop(struct mg_context *ctx)
 	/* Send INVALID_SOCKET to all threads */
 	fake.sock = INVALID_SOCKET;
 	for (i = 0; i < ctx->num_idle + ctx->num_active; i++)
-		(void) send(ctx->ctl[0], &fake, sizeof(fake), 0);
+		(void) send(ctx->ctl[0], (void *) &fake, sizeof(fake), 0);
 
 	/* Wait until mg_fini() stops */
 	while (ctx->stop_flag != 2)
@@ -3806,11 +3782,16 @@ mg_start(void)
 	struct mg_context	*ctx;
 	int			i;
 
+#if defined(_WIN32)
+	WSADATA data;
+	WSAStartup(MAKEWORD(2,2), &data);
+#endif /* _WIN32 */
+
 	if ((ctx = (struct mg_context *) calloc(1, sizeof(*ctx))) == NULL) {
 		cry("cannot allocate mongoose context");
 		return (NULL);
 	} else if (!create_control_socket_pair(ctx->ctl)) {
-		cry("Cannot create control socket: %s", strerror(errno));
+		cry("Cannot create control socket: %d", ERRNO);
 		free(ctx);
 		return (NULL);
 	}
@@ -3837,10 +3818,6 @@ mg_start(void)
 #if 0
 	tm->tm_gmtoff - 3600 * (tm->tm_isdst > 0 ? 1 : 0);
 #endif
-
-#ifdef _WIN32
-	{WSADATA data;	WSAStartup(MAKEWORD(2,2), &data);}
-#endif /* _WIN32 */
 
 	/* Start master (listening) thread */
 	(void) pthread_mutex_init(&ctx->opt_mutex, NULL);
