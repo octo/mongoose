@@ -435,7 +435,8 @@ sub do_embedded_test {
 }
 
 sub do_unit_test {
-	my $cmd = "cc -o $unit_test_exe $root/unit_test.c -I. -lpthread ";
+	my $cmd = "cc -o $unit_test_exe $root/unit_test.c ".
+		"-I. -DNO_SSL -lpthread ";
 	if (on_windows()) {
 		$cmd = "cl $root/unit_test.c /I. /nologo ".
 			"/link /out:$unit_test_exe.exe ws2_32.lib ";
