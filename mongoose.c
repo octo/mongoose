@@ -266,7 +266,7 @@ struct usa {
 struct mgstat {
 	bool_t		is_directory;
 	uint64_t	st_size;
-	time_t		st_mtime;
+	time_t		modtime;
 };
 
 /*
@@ -726,7 +726,7 @@ mg_stat(const char *path, struct mgstat *stp)
 	if (_wstat64(wbuf, &st) == 0) {
 		ok = 0;
 		stp->st_size = st.st_size;
-		stp->st_mtime = st.st_mtime;
+		stp->modtime = st.st_mtime;
 		stp->is_directory = S_ISDIR(st.st_mode);
 	} else {
 		ok = -1;
@@ -922,10 +922,10 @@ mg_stat(const char *path, struct mgstat *stp)
 	struct stat	st;
 	int		ok;
 
-	if (stat(wbuf, &st)) {
+	if (stat(path, &st) == 0) {
 		ok = 0;
 		stp->st_size = st.st_size;
-		stp->st_mtime = st.st_mtime;
+		stp->modtime = st.st_mtime;
 		stp->is_directory = S_ISDIR(st.st_mode);
 	} else {
 		ok = -1;
@@ -2013,7 +2013,7 @@ print_dir_entry(struct de *de)
 			    "%.1fG", (double) de->st.st_size / 1073741824);
 	}
 	(void) strftime(mod, sizeof(mod), "%d-%b-%Y %H:%M",
-		localtime(&de->st.st_mtime));
+		localtime(&de->st.modtime));
 	de->conn->num_bytes_sent += mg_printf(de->conn,
 	    "<tr><td><a href=\"%s%s\">%s%s</a></td>"
 	    "<td>&nbsp;%s</td><td>&nbsp;&nbsp;%s</td></tr>\n",
@@ -2041,8 +2041,8 @@ compare_dir_entries(const void *p1, const void *p2)
 		cmp_result = a->st.st_size == b->st.st_size ? 0 :
 			a->st.st_size > b->st.st_size ? 1 : -1;
 	} else if (*query_string == 'd') {
-		cmp_result = a->st.st_mtime == b->st.st_mtime ? 0 :
-			a->st.st_mtime > b->st.st_mtime ? 1 : -1;
+		cmp_result = a->st.modtime == b->st.modtime ? 0 :
+			a->st.modtime > b->st.modtime ? 1 : -1;
 	}
 
 	return (query_string[1] == 'd' ? -cmp_result : cmp_result);
@@ -2187,9 +2187,9 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 
 	/* Prepare Etag, Date, Last-Modified headers */
 	(void) strftime(date, sizeof(date), fmt, localtime(&curtime));
-	(void) strftime(lm, sizeof(lm), fmt, localtime(&stp->st_mtime));
+	(void) strftime(lm, sizeof(lm), fmt, localtime(&stp->modtime));
 	(void) mg_snprintf(etag, sizeof(etag), "%lx.%lx",
-	    (unsigned long) stp->st_mtime, (unsigned long) stp->st_size);
+	    (unsigned long) stp->modtime, (unsigned long) stp->st_size);
 
 	/* Since we send Content-Length, we can keep the connection alive */
 	conn->keep_alive = does_client_want_keep_alive(conn);
@@ -2367,7 +2367,7 @@ static int
 not_modified(const struct mg_connection *conn, const struct mgstat *stp)
 {
 	const char *ims = mg_get_header(conn, "If-Modified-Since");
-	return (ims != NULL && stp->st_mtime < date_to_epoch(ims));
+	return (ims != NULL && stp->modtime < date_to_epoch(ims));
 }
 
 static bool_t
