@@ -233,6 +233,7 @@ struct ssl_func {
 		const char *, int)) FUNC(12))((x), (y), (z))
 #define SSL_CTX_set_default_passwd_cb(x,y) \
 	(* (void (*)(SSL_CTX *, mg_spcb_t))FUNC(13))((x),(y))
+#define SSL_CTX_free(x) (* (void (*)(SSL_CTX *))FUNC(14))(x)
 
 static struct ssl_func	ssl_sw[] = {
 	{"SSL_free",			NULL},
@@ -249,6 +250,7 @@ static struct ssl_func	ssl_sw[] = {
 	{"SSL_CTX_use_PrivateKey_file",	NULL},
 	{"SSL_CTX_use_certificate_file",NULL},
 	{"SSL_CTX_set_default_passwd_cb",NULL},
+	{"SSL_CTX_free",		NULL},
 	{NULL,				NULL}
 };
 
@@ -315,9 +317,8 @@ struct mg_context {
 	int		max_threads;	/* Maximum number of threads	*/
 	int		num_active;	/* Number of active threads	*/
 	int		num_idle;	/* Number of idle threads	*/
-	pthread_mutex_t	thr_mutex;	/* Threading guard		*/
-	pthread_cond_t	new_conn_cond;	/* New connection condition 	*/
-	pthread_cond_t	new_thr_cond;	/* New thread condition 	*/
+
+	SOCKET		ctl[2];		/* Control socket pair		*/
 
 	mg_spcb_t	ssl_password_callback;
 };
@@ -326,8 +327,7 @@ struct mg_connection {
 	struct mg_request_info	request_info;
 	struct mg_context *ctx;		/* Mongoose context we belong to*/
 	SSL		*ssl;		/* SSL descriptor		*/
-	SOCKET		sock;		/* Connected socket		*/
-	struct usa	rsa;		/* Remote socket address	*/
+	struct socket	client;		/* Connected client		*/
 	struct usa	lsa;		/* Local socket address		*/
 	time_t		birth_time;	/* Time connection was accepted	*/
 	bool_t		free_post_data;	/* post_data was malloc-ed	*/
@@ -1076,7 +1076,7 @@ int
 mg_write(struct mg_connection *conn, const void *buf, int len)
 {
 	assert(len >= 0);
-	return ((int) push(-1, conn->sock, conn->ssl,
+	return ((int) push(-1, conn->client.sock, conn->ssl,
 				(const char *) buf, (uint64_t) len));
 }
 
@@ -2435,7 +2435,7 @@ handle_request_body(struct mg_connection *conn, int fd)
 				to_read = sizeof(buf);
 				if ((uint64_t) to_read > content_len)
 					to_read = (int) content_len;
-				nread = pull(-1, conn->sock,
+				nread = pull(-1, conn->client.sock,
 				    conn->ssl, buf, to_read);
 				if (nread <= 0)
 					break;
@@ -2515,7 +2515,8 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 	addenv(blk, "SERVER_ROOT=%s", root);
 	addenv(blk, "DOCUMENT_ROOT=%s", root);
 	addenv(blk, "REQUEST_METHOD=%s", conn->request_info.request_method);
-	addenv(blk, "REMOTE_ADDR=%s", inet_ntoa(conn->rsa.u.sin.sin_addr));
+	addenv(blk, "REMOTE_ADDR=%s",
+	    inet_ntoa(conn->client.usa.u.sin.sin_addr));
 	addenv(blk, "REMOTE_PORT=%d", conn->request_info.remote_port);
 	addenv(blk, "REQUEST_URI=%s", conn->request_info.uri);
 	addenv(blk, "SCRIPT_NAME=%s", prog + strlen(root));
@@ -3023,7 +3024,7 @@ log_access(const struct mg_connection *conn)
 	pthread_mutex_lock(&mutex);
 	(void) fprintf(conn->ctx->access_log,
 	    "%s - %s [%s %+05d] \"%s %s HTTP/%d.%d\" %d %llu",
-	    inet_ntoa(conn->rsa.u.sin.sin_addr),
+	    inet_ntoa(conn->client.usa.u.sin.sin_addr),
 	    ri->remote_user == NULL ? "-" : ri->remote_user,
 	    date, tz_offset,
 	    ri->request_method ? ri->request_method : "-",
@@ -3110,31 +3111,33 @@ mg_fini(struct mg_context *ctx)
 	close_all_listening_sockets(ctx);
 
 	/* Wait until all threads finish */
-	pthread_mutex_lock(&ctx->thr_mutex);
-	while (ctx->num_active > 0 && ctx->num_idle > 0)
-		(void) pthread_cond_wait(&ctx->new_thr_cond, &ctx->thr_mutex);
-	pthread_mutex_unlock(&ctx->thr_mutex);
+	while (ctx->num_active + ctx->num_idle > 0)
+		sleep(0);
 
+	/* Deallocate all registered callbacks */
 	for (i = 0; i < ctx->num_callbacks; i++)
 		if (ctx->callbacks[i].uri_regex != NULL)
 			free(ctx->callbacks[i].uri_regex);
 
+	/* Deallocate all options */
 	for (i = 0; i < NUM_OPTIONS; i++)
 		if (ctx->options[i] != NULL)
 			free(ctx->options[i]);
 
+	/* Close log files */
 	if (ctx->access_log)
 		(void) fclose(ctx->access_log);
 	if (ctx->error_log)
 		(void) fclose(ctx->error_log);
 
-	/* TODO: free SSL context */
-	(void) pthread_mutex_destroy(&ctx->opt_mutex);
-	(void) pthread_mutex_destroy(&ctx->thr_mutex);
-	(void) pthread_cond_destroy(&ctx->new_conn_cond);
-	(void) pthread_cond_destroy(&ctx->new_thr_cond);
+	/* Deallocate SSL context */
+	if (ctx->ssl_ctx)
+		SSL_CTX_free(ctx->ssl_ctx);
 
-	free(ctx);
+	(void) pthread_mutex_destroy(&ctx->opt_mutex);
+
+	/* Signal mg_stop() that we're done */
+	ctx->stop_flag = 2;
 }
 
 #if !defined(_WIN32)
@@ -3505,8 +3508,8 @@ close_connection(struct mg_connection *conn)
 	reset_per_request_attributes(conn);
 	if (conn->ssl)
 		SSL_free(conn->ssl);
-	if (conn->sock != INVALID_SOCKET) {
-		close_socket_gracefully(conn->sock);
+	if (conn->client.sock != INVALID_SOCKET) {
+		close_socket_gracefully(conn->client.sock);
 	}
 }
 
@@ -3554,8 +3557,8 @@ process_new_connection(struct mg_connection *conn)
 	do {
 		/* If next request is not pipelined, read it in */
 		if ((request_len = get_request_len(buf, (size_t) nread)) == 0)
-			request_len = read_request(-1, conn->sock, conn->ssl,
-			    buf, sizeof(buf), &nread);
+			request_len = read_request(-1, conn->client.sock,
+			    conn->ssl, buf, sizeof(buf), &nread);
 		assert(nread >= request_len);
 
 		if (request_len == 0)
@@ -3570,7 +3573,7 @@ process_new_connection(struct mg_connection *conn)
 		/* 0-terminate the request: parse_request uses sscanf */
 		buf[request_len - 1] = '\0';
 
-		if (parse_http_request(buf, ri, &conn->rsa)) {
+		if (parse_http_request(buf, ri, &conn->client.usa)) {
 			if (ri->http_version_major != 1 ||
 			     (ri->http_version_major == 1 &&
 			     (ri->http_version_minor < 0 ||
@@ -3599,127 +3602,100 @@ static void
 worker_loop(struct mg_context *ctx)
 {
 	struct mg_connection	conn;
-	struct timespec		ts;
-	bool_t			is_ssl;
+	fd_set			fdset;
+	struct timeval		tv;
 
-	pthread_mutex_lock(&ctx->thr_mutex);
 	ctx->num_idle++;
-	pthread_cond_signal(&ctx->new_thr_cond);
-	pthread_mutex_unlock(&ctx->thr_mutex);
 
-	for (;;) {
+	do {
+		/* Wait until some data arrives on a control socket */
+		FD_ZERO(&fdset);
+		FD_SET(ctx->ctl[1], &fdset);
+
+		tv.tv_sec = atoi(ctx->options[OPT_IDLE_TIME]);
+		tv.tv_usec = 0;
+
 		(void) memset(&conn, 0, sizeof(conn));
-		pthread_mutex_lock(&ctx->thr_mutex);
 
-		ts.tv_nsec = 0;
-		ts.tv_sec = time(NULL) + atoi(ctx->options[OPT_IDLE_TIME]);
+		if (select(ctx->ctl[1] + 1, &fdset, NULL, NULL, &tv) != 1) {
+			conn.client.sock = INVALID_SOCKET;
+		} else if (recv(ctx->ctl[1], &conn.client,
+		    sizeof(conn.client), 0) != sizeof(conn.client)) {
+			cry("Error reading from control socket: %d", ERRNO);
+			conn.client.sock = INVALID_SOCKET;
+		} else if (conn.client.sock != INVALID_SOCKET) {
+			/*
+			 * Received some work to do. Note that the conditional
+			 * above tests accepted socket for INVALID_SOCKET.
+			 * It could be INVALID_SOCKET when mg_stop() was
+			 * called. mg_stop() sends INVALID_SOCKETs to all
+			 * waiting threads to force them to exit.
+			 */
+			ctx->num_idle--;
+			ctx->num_active++;
+			assert(ctx->num_idle >= 0);
 
-		/* Wait until some socket is accepted by the master thread */
-		if (ctx->num_accepted == 0)
-			(void) pthread_cond_timedwait(
-			    &ctx->new_conn_cond, &ctx->thr_mutex, &ts);
+			/* Initialize the rest of attributes */
+			conn.ctx = ctx;
+			conn.birth_time = time(NULL);
 
-		/* Exit this thread if there are no accepted sockets */
-		if (ctx->num_accepted == 0) {
-			pthread_mutex_unlock(&ctx->thr_mutex);
-			break;
+			if (conn.client.is_ssl &&
+			    (conn.ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
+				cry("%s: SSL_new: %d", __func__, ERRNO);
+			} else if (conn.client.is_ssl &&
+			    SSL_set_fd(conn.ssl, conn.client.sock) != 1) {
+				cry("%s: SSL_set_fd: %d", __func__, ERRNO);
+			} else if (conn.client.is_ssl &&
+			    SSL_accept(conn.ssl) != 1) {
+				cry("%s: SSL handshake failed", __func__);
+			} else {
+				process_new_connection(&conn);
+			}
+
+			close_connection(&conn);
+			ctx->num_active--;
+			ctx->num_idle++;
+			assert(ctx->num_active >= 0);
 		}
+	} while (conn.client.sock != INVALID_SOCKET);
 
-		ctx->num_active++;
-		ctx->num_idle--;
-
-		assert(ctx->num_accepted > 0);
-		assert(ctx->num_idle >= 0);
-		assert(ctx->num_idle + ctx->num_active <= ctx->max_threads);
-
-		/* Copy data from the queue */
-		ctx->num_accepted--;
-		conn.sock = ctx->accepted[ctx->num_accepted].sock;
-		conn.rsa = ctx->accepted[ctx->num_accepted].usa;
-		is_ssl = ctx->accepted[ctx->num_accepted].is_ssl;
-
-		/* Everything is copied, now it is safe to release the mutex */
-		pthread_mutex_unlock(&ctx->thr_mutex);
-
-		/* Initialize the rest of attributes */
-		conn.ctx = ctx;
-		conn.birth_time = time(NULL);
-
-		if (is_ssl && (conn.ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
-			cry("%s: SSL_new: %s", __func__, strerror(ERRNO));
-		} else if (is_ssl && SSL_set_fd(conn.ssl, conn.sock) != 1) {
-			cry("%s: SSL_set_fd: %s", __func__, strerror(ERRNO));
-		} else if (is_ssl && SSL_accept(conn.ssl) != 1) {
-			cry("%s: SSL handshake failed", __func__);
-		} else {
-		    process_new_connection(&conn);
-		}
-
-		close_connection(&conn);
-
-		pthread_mutex_lock(&ctx->thr_mutex);
-		ctx->num_active--;
-		ctx->num_idle++;
-		assert(ctx->num_active >= 0);
-		assert(ctx->num_idle + ctx->num_active <= ctx->max_threads);
-		pthread_cond_signal(&ctx->new_thr_cond);
-		pthread_mutex_unlock(&ctx->thr_mutex);
-	}
-
-	pthread_mutex_lock(&ctx->thr_mutex);
 	ctx->num_idle--;
-	assert(ctx->num_idle >= 0);
-	pthread_cond_signal(&ctx->new_thr_cond);
-	pthread_mutex_unlock(&ctx->thr_mutex);
 }
 
 static void
-accept_new_connection(const struct socket *l, struct mg_context *ctx)
+accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 {
-	SOCKET		sock;
-	struct usa	rsa;
+	struct socket	accepted;
 
-	rsa.len = sizeof(rsa.u.sin);
+	accepted.usa.len = sizeof(accepted.usa.u.sin);
 
-	if ((sock = accept(l->sock, &rsa.u.sa, &rsa.len)) == INVALID_SOCKET) {
+	if ((accepted.sock = accept(listener->sock,
+	    &accepted.usa.u.sa, &accepted.usa.len)) == INVALID_SOCKET) {
 		cry("%s: accept: %d", __func__, ERRNO);
-	} else if (!check_acl(ctx, &rsa)) {
+	} else if (!check_acl(ctx, &accepted.usa)) {
 		cry("%s: %s is not allowed to connect",
-		    __func__, inet_ntoa(rsa.u.sin.sin_addr));
-		(void) closesocket(sock);
+		    __func__, inet_ntoa(accepted.usa.u.sin.sin_addr));
+		(void) closesocket(accepted.sock);
 	} else {
 		/*
-		 * Socket accepted. Put it into the queue for some
-		 * worker thread to grab later on.
+		 * If we need to start a new thread and it is maximum allowed
+		 * already running, wait until some become idle.
 		 */
-		pthread_mutex_lock(&ctx->thr_mutex);
+		while (ctx->num_active >= ctx->max_threads)
+			sleep(0);
 
-		/* Wait if there is no space in the queue */
-		while (ctx->num_accepted >= (int) ARRAY_SIZE(ctx->accepted))
-			(void) pthread_cond_wait(
-			    &ctx->new_thr_cond, &ctx->thr_mutex);
-
-		ctx->accepted[ctx->num_accepted].sock = sock;
-		ctx->accepted[ctx->num_accepted].usa = rsa;
-		ctx->accepted[ctx->num_accepted].is_ssl = l->is_ssl;
-		ctx->num_accepted++;
-
-		pthread_cond_signal(&ctx->new_conn_cond);
-
-		/*
-		 * Wait if we need to start a new thread, and there are
-		 * already maximum possible started
-		 */
-		while (ctx->num_idle == 0 &&
-		    ctx->num_active == ctx->max_threads)
-			(void) pthread_cond_wait(
-			    &ctx->new_thr_cond, &ctx->thr_mutex);
-
-		/* Start a new thread if there are no idle threads */
+		/* Start a new thread i	f needed */
 		if (ctx->num_idle == 0)
 			start_thread((mg_thread_func_t) worker_loop, ctx);
 
-		pthread_mutex_unlock(&ctx->thr_mutex);
+		/* Send accepted socket to some of the worker threads */
+		accepted.is_ssl = listener->is_ssl;
+		if (send(ctx->ctl[0], &accepted,
+		    sizeof(accepted), 0) != sizeof(accepted)) {
+			cry("%s control socket error: %s",
+			    __func__, strerror(errno));
+			(void) closesocket(accepted.sock);
+		}
 	}
 }
 
@@ -3766,7 +3742,62 @@ listening_loop(struct mg_context *ctx)
 void
 mg_stop(struct mg_context *ctx)
 {
+	struct socket	fake;
+	int		i;
+
 	ctx->stop_flag = 1;
+
+	/* Send INVALID_SOCKET to all threads */
+	fake.sock = INVALID_SOCKET;
+	for (i = 0; i < ctx->num_idle + ctx->num_active; i++)
+		(void) send(ctx->ctl[0], &fake, sizeof(fake), 0);
+
+	/* Wait until mg_fini() stops */
+	while (ctx->stop_flag != 2)
+		sleep(0);
+
+	free(ctx);
+}
+
+/*
+ * Create control UDP socket pair, used by master thread to send an
+ * accepted client sockets down to the worker threads.
+ */
+static bool_t
+create_control_socket_pair(SOCKET sp[2])
+{
+	struct sockaddr_in	sa;
+	socklen_t		len = sizeof(sa);
+	bool_t			ret;
+
+	sp[0] = socket(PF_INET, SOCK_DGRAM, 0);
+	sp[1] = socket(PF_INET, SOCK_DGRAM, 0);
+
+	(void) memset(&sa, 0, sizeof(sa));
+	sa.sin_family 		= AF_INET;
+	sa.sin_port		= htons(0);
+	sa.sin_addr.s_addr	= htonl(INADDR_LOOPBACK);
+
+	if ((sp[0] = socket(PF_INET, SOCK_DGRAM, 0)) != INVALID_SOCKET &&
+	    (sp[1] = socket(PF_INET, SOCK_DGRAM, 0)) != INVALID_SOCKET	&&
+	    !bind(sp[1], (struct sockaddr *) &sa, len) &&
+	    !getsockname(sp[1], (struct sockaddr *) &sa, &len) &&
+	    !connect(sp[0], (struct sockaddr *) &sa, len)) {
+
+		/* Success */
+		ret = TRUE;
+		set_close_on_exec(sp[0]);
+		set_close_on_exec(sp[1]);
+	} else {
+		/* Failure, close descriptors */
+		if (sp[0] != INVALID_SOCKET)
+			(void) closesocket(sp[0]);
+		if (sp[1] != INVALID_SOCKET)
+			(void) closesocket(sp[1]);
+		ret = FALSE;
+	}
+
+	return (ret);
 }
 
 struct mg_context *
@@ -3778,8 +3809,11 @@ mg_start(void)
 	if ((ctx = (struct mg_context *) calloc(1, sizeof(*ctx))) == NULL) {
 		cry("cannot allocate mongoose context");
 		return (NULL);
+	} else if (!create_control_socket_pair(ctx->ctl)) {
+		cry("Cannot create control socket: %s", strerror(errno));
+		free(ctx);
+		return (NULL);
 	}
-
 	/* Initialize options. First pass: set default option values */
 	for (i = 0; known_options[i].name != NULL; i++)
 		ctx->options[setters[i].context_index] =
@@ -3810,9 +3844,6 @@ mg_start(void)
 
 	/* Start master (listening) thread */
 	(void) pthread_mutex_init(&ctx->opt_mutex, NULL);
-	(void) pthread_mutex_init(&ctx->thr_mutex, NULL);
-	(void) pthread_cond_init(&ctx->new_conn_cond, NULL);
-	(void) pthread_cond_init(&ctx->new_thr_cond, NULL);
 	start_thread((mg_thread_func_t) listening_loop, ctx);
 
 	return (ctx);
