@@ -99,8 +99,8 @@
 #define	lseek(x, y, z)		_lseek(x, y, z)
 #define	close(x)		_close(x)
 #define	sleep(x)		Sleep((x) * 1000)
-#define	lock_file(x)		_lock_file(x)
-#define	unlock_file(x)		_unlock_file(x)
+#define	flockfile(x)		_lock_file(x)
+#define	funlockfile(x)		_unlock_file(x)
 
 #if !defined(fileno)
 #define	fileno(x)		_fileno(x)
@@ -363,7 +363,7 @@ cry(const char *fmt, ...)
 
 	fp = error_log == NULL ? stderr : error_log;
 
-	lock_file(fp);
+	flockfile(fp);
 
 	va_start(ap, fmt);
 	(void) vfprintf(fp, fmt, ap);
@@ -371,7 +371,7 @@ cry(const char *fmt, ...)
 
 	fputc('\n', fp);
 
-	unlock_file(fp);
+	funlockfile(fp);
 }
 
 const char *
@@ -2995,7 +2995,7 @@ log_access(const struct mg_connection *conn)
 
 	ri = &conn->request_info;
 
-	lock_file(conn->ctx->access_log);
+	flockfile(conn->ctx->access_log);
 
 	(void) fprintf(conn->ctx->access_log,
 	    "%s - %s [%s %+05d] \"%s %s HTTP/%d.%d\" %d %llu",
@@ -3012,7 +3012,7 @@ log_access(const struct mg_connection *conn)
 	(void) fputc('\n', conn->ctx->access_log);
 	(void) fflush(conn->ctx->access_log);
 
-	unlock_file(conn->ctx->access_log);
+	funlockfile(conn->ctx->access_log);
 }
 
 static bool_t
