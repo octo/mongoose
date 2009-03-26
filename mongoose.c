@@ -3880,6 +3880,11 @@ mg_start(void)
 #if 0
 	tm->tm_gmtoff - 3600 * (tm->tm_isdst > 0 ? 1 : 0);
 #endif
+	/*
+	 * Ignore SIGPIPE signal, so if browser cancels the request, it
+	 * won't kill the whole process.
+	 */
+	(void) signal(SIGPIPE, SIG_IGN);
 
 	/* Start master (listening) thread */
 	(void) pthread_mutex_init(&ctx->opt_mutex, NULL);

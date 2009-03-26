@@ -340,7 +340,6 @@ main(int argc, char *argv[])
 
 #ifndef _WIN32
 	(void) signal(SIGCHLD, signal_handler);
-	(void) signal(SIGPIPE, SIG_IGN);
 #endif /* _WIN32 */
 
 	(void) signal(SIGTERM, signal_handler);
