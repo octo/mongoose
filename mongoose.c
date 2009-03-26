@@ -486,7 +486,7 @@ mg_vsnprintf(char *buf, size_t buflen, const char *fmt, va_list ap)
 		n = 0;
 	} else if (n >= (int) buflen) {
 		cry(NULL, "truncating vsnprintf buffer: [%.*s]",
-		    n > 200 ? 200 : n);
+		    n > 200 ? 200 : n, buf);
 		n = (int) buflen - 1;
 	}
 	buf[n] = '\0';
