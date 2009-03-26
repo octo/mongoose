@@ -255,6 +255,10 @@ static struct ssl_func	ssl_sw[] = {
 	{NULL,				NULL}
 };
 
+/*
+ * Unified socket address. For IPv6 support, add IPv6 address structure
+ * in the union u.
+ */
 struct usa {
 	socklen_t len;
 	union {
@@ -263,10 +267,13 @@ struct usa {
 	} u;
 };
 
+/*
+ * Structure used by mg_stat() function. Uses 64 bit file length.
+ */
 struct mgstat {
-	bool_t		is_directory;
-	uint64_t	st_size;
-	time_t		modtime;
+	bool_t		is_directory;	/* Directory marker		*/
+	uint64_t	size;		/* File size			*/
+	time_t		mtime;		/* Modification time		*/
 };
 
 /*
@@ -282,6 +289,11 @@ enum mg_option_index {
 	NUM_OPTIONS
 };
 
+/*
+ * Structure used to describe listening socket, or socket which was
+ * accept()-ed by the master thread and queued for future handling
+ * by the worker thread.
+ */
 struct socket {
 	SOCKET		sock;		/* Listening socket		*/
 	struct usa	usa;		/* Socket address		*/
@@ -330,6 +342,9 @@ struct mg_context {
 	mg_spcb_t	ssl_password_callback;
 };
 
+/*
+ * Client connection.
+ */
 struct mg_connection {
 	struct mg_request_info	request_info;
 	struct mg_context *ctx;		/* Mongoose context we belong to*/
@@ -667,7 +682,7 @@ static void
 fix_directory_separators(char *path)
 {
 	int	i;
-	
+
 	for (i = 0; path[i] != '\0'; i++) {
 		if (path[i] == '/')
 			path[i] = '\\';
@@ -675,7 +690,7 @@ fix_directory_separators(char *path)
 		if (path[i] == '\\' && i > 0)
 			while (path[i + 1] == '\\' || path[i + 1] == '/')
 				(void) memmove(path + i + 1,
-				    path + i + 2, strlen(path + i + 1));		
+				    path + i + 2, strlen(path + i + 1));
 	}
 }
 
@@ -728,13 +743,13 @@ mg_stat(const char *path, struct mgstat *stp)
 	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
 	if (_wstat64(wbuf, &st) == 0) {
 		ok = 0;
-		stp->st_size = st.st_size;
-		stp->modtime = st.st_mtime;
+		stp->size = st.st_size;
+		stp->mtime = st.st_mtime;
 		stp->is_directory = S_ISDIR(st.st_mode);
 	} else {
 		ok = -1;
 	}
-	
+
 	return (ok);
 }
 
@@ -927,13 +942,13 @@ mg_stat(const char *path, struct mgstat *stp)
 
 	if (stat(path, &st) == 0) {
 		ok = 0;
-		stp->st_size = st.st_size;
-		stp->modtime = st.st_mtime;
+		stp->size = st.st_size;
+		stp->mtime = st.st_mtime;
 		stp->is_directory = S_ISDIR(st.st_mode);
 	} else {
 		ok = -1;
 	}
-	
+
 	return (ok);
 }
 
@@ -2002,21 +2017,21 @@ print_dir_entry(struct de *de)
 	if (de->st.is_directory) {
 		(void) mg_snprintf(size, sizeof(size), "%s", "[DIRECTORY]");
 	} else {
-		if (de->st.st_size < 1024)
+		if (de->st.size < 1024)
 			(void) mg_snprintf(size, sizeof(size),
-			    "%lu", (unsigned long) de->st.st_size);
-		else if (de->st.st_size < 1024 * 1024)
+			    "%lu", (unsigned long) de->st.size);
+		else if (de->st.size < 1024 * 1024)
 			(void) mg_snprintf(size, sizeof(size),
-			    "%.1fk", (double) de->st.st_size / 1024);
-		else if (de->st.st_size < 1024 * 1024 * 1024)
+			    "%.1fk", (double) de->st.size / 1024);
+		else if (de->st.size < 1024 * 1024 * 1024)
 			(void) mg_snprintf(size, sizeof(size),
-			    "%.1fM", (double) de->st.st_size / 1048576);
+			    "%.1fM", (double) de->st.size / 1048576);
 		else
 			(void) mg_snprintf(size, sizeof(size),
-			    "%.1fG", (double) de->st.st_size / 1073741824);
+			    "%.1fG", (double) de->st.size / 1073741824);
 	}
 	(void) strftime(mod, sizeof(mod), "%d-%b-%Y %H:%M",
-		localtime(&de->st.modtime));
+		localtime(&de->st.mtime));
 	de->conn->num_bytes_sent += mg_printf(de->conn,
 	    "<tr><td><a href=\"%s%s\">%s%s</a></td>"
 	    "<td>&nbsp;%s</td><td>&nbsp;&nbsp;%s</td></tr>\n",
@@ -2041,11 +2056,11 @@ compare_dir_entries(const void *p1, const void *p2)
 	} else if (*query_string == 'n') {
 		cmp_result = strcmp(a->file_name, b->file_name);
 	} else if (*query_string == 's') {
-		cmp_result = a->st.st_size == b->st.st_size ? 0 :
-			a->st.st_size > b->st.st_size ? 1 : -1;
+		cmp_result = a->st.size == b->st.size ? 0 :
+			a->st.size > b->st.size ? 1 : -1;
 	} else if (*query_string == 'd') {
-		cmp_result = a->st.modtime == b->st.modtime ? 0 :
-			a->st.modtime > b->st.modtime ? 1 : -1;
+		cmp_result = a->st.mtime == b->st.mtime ? 0 :
+			a->st.mtime > b->st.mtime ? 1 : -1;
 	}
 
 	return (query_string[1] == 'd' ? -cmp_result : cmp_result);
@@ -2164,7 +2179,7 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	int		fd, n;
 
 	mime_type = get_mime_type(path);
-	cl = stp->st_size;
+	cl = stp->size;
 	conn->request_info.status_code = 200;
 	range[0] = '\0';
 
@@ -2190,9 +2205,9 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 
 	/* Prepare Etag, Date, Last-Modified headers */
 	(void) strftime(date, sizeof(date), fmt, localtime(&curtime));
-	(void) strftime(lm, sizeof(lm), fmt, localtime(&stp->modtime));
+	(void) strftime(lm, sizeof(lm), fmt, localtime(&stp->mtime));
 	(void) mg_snprintf(etag, sizeof(etag), "%lx.%lx",
-	    (unsigned long) stp->modtime, (unsigned long) stp->st_size);
+	    (unsigned long) stp->mtime, (unsigned long) stp->size);
 
 	/* Since we send Content-Length, we can keep the connection alive */
 	conn->keep_alive = does_client_want_keep_alive(conn);
@@ -2370,7 +2385,7 @@ static int
 not_modified(const struct mg_connection *conn, const struct mgstat *stp)
 {
 	const char *ims = mg_get_header(conn, "If-Modified-Since");
-	return (ims != NULL && stp->modtime < date_to_epoch(ims));
+	return (ims != NULL && stp->mtime < date_to_epoch(ims));
 }
 
 static bool_t
@@ -3145,7 +3160,7 @@ mg_fini(struct mg_context *ctx)
 	/* Deallocate SSL context */
 	if (ctx->ssl_ctx)
 		SSL_CTX_free(ctx->ssl_ctx);
-		
+
 	/* Close control sockets */
 	(void) closesocket(ctx->ctl[0]);
 	(void) closesocket(ctx->ctl[1]);

@@ -1,6 +1,6 @@
 PROG=	mongoose
 SRCS=	main.c mongoose.c
-COPT=	-W -Wall -std=c99 -pedantic -Os -s
+COPT=	-W -Wall -std=c99 -pedantic #-Os -s
 
 # Possible flags: (in brackets are rough numbers for 'gcc -O2' on i386)
 # -DHAVE_MD5		- use system md5 library (-2kb)
@@ -73,3 +73,9 @@ release: clean
 
 clean:
 	rm -rf *.o *.core $(PROG) *.obj $(PROG).1.txt *.dSYM *.tgz
+
+p:
+	swig -python mongoose.swig
+	cc  -I python mongoose.c mongoose_wrap.c -bundle \
+		-o /tmp/_mongoose.so -flat_namespace -undefined suppress
+	PYTHONPATH=/tmp python test_swig.py
