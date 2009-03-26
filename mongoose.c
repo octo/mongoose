@@ -169,7 +169,6 @@ typedef int SOCKET;
 #define	MAX_CGI_ENVIR_VARS	64
 #define	MAX_REQUEST_SIZE	16384
 #define	MAX_LISTENING_SOCKETS	10
-#define	MAX_QUEUED_SOCKETS	10
 #define	MAX_CALLBACKS		20
 #define	ARRAY_SIZE(array)	(sizeof(array) / sizeof(array[0]))
 #define	UNKNOWN_CONTENT_LENGTH	((uint64_t) ~0ULL)
@@ -322,9 +321,6 @@ struct mg_context {
 	struct socket	listeners[MAX_LISTENING_SOCKETS];
 	int		num_listeners;
 
-	struct socket	accepted[MAX_QUEUED_SOCKETS];
-	int		num_accepted;
-
 	struct callback	callbacks[MAX_CALLBACKS];
 	int		num_callbacks;
 
@@ -335,7 +331,7 @@ struct mg_context {
 	int		num_active;	/* Number of active threads	*/
 	int		num_idle;	/* Number of idle threads	*/
 
-	SOCKET		ctl[2];		/* Control socket pair		*/
+	int		ctl[2];		/* Control pipe			*/
 
 	mg_spcb_t	ssl_password_callback;
 };
@@ -3177,9 +3173,9 @@ mg_fini(struct mg_context *ctx)
 	if (ctx->ssl_ctx)
 		SSL_CTX_free(ctx->ssl_ctx);
 
-	/* Close control sockets */
-	(void) closesocket(ctx->ctl[0]);
-	(void) closesocket(ctx->ctl[1]);
+	/* Close control pipe */
+	(void) close(ctx->ctl[0]);
+	(void) close(ctx->ctl[1]);
 
 	(void) pthread_mutex_destroy(&ctx->opt_mutex);
 
@@ -3653,40 +3649,47 @@ process_new_connection(struct mg_connection *conn)
 	} while (conn->keep_alive);
 }
 
+/*
+ * Worker thread function. It blocks on reading from the control pipe. Every
+ * second master thread sends fake invalid sockets to all idle threads, so
+ * they can unblock, check for idle timeout and exit if necessary.
+ * This function increments and decrements global counters - for idle and
+ * active threads. Atomic functions were not used, since:
+ *    a) there is no portable interface for atomic increment and decrement
+ *    b) the increments and decrements are blind with no return values, and I
+ *       believe in this case atomic ops are not needed.
+ */
 static void
 worker_loop(struct mg_context *ctx)
 {
 	struct mg_connection	conn;
-	fd_set			fdset;
-	struct timeval		tv;
+	time_t			expire;
 
 	ctx->num_idle++;
+	expire = time(NULL) + atoi(ctx->options[OPT_IDLE_TIME]) + 1;
 
-	do {
-		/* Wait until some data arrives on a control socket */
-		FD_ZERO(&fdset);
-		FD_SET(ctx->ctl[1], &fdset);
-
-		tv.tv_sec = atoi(ctx->options[OPT_IDLE_TIME]);
-		tv.tv_usec = 0;
-
+	while (time(NULL) < expire && ctx->stop_flag == 0) {
 		(void) memset(&conn, 0, sizeof(conn));
 
-		if (select(ctx->ctl[1] + 1, &fdset, NULL, NULL, &tv) != 1) {
-			conn.client.sock = INVALID_SOCKET;
-		} else if (recv(ctx->ctl[1], (void *) &conn.client,
-		    sizeof(conn.client), 0) != sizeof(conn.client)) {
-			cry(NULL, "%s: Error reading from control socket: %d",
+		/*
+		 * Theoretically, read() may return less than requested.
+		 * It should not happen, but if it will, it is a problem.
+		 * Then we should revert to using UDP sockets, which
+		 * are datagram channels, so other thread never reads
+		 * some part of the data in the control pipe.
+		 */
+		if (read(ctx->ctl[0], (void *) &conn.client,
+		    sizeof(conn.client)) != sizeof(conn.client)) {
+			cry(NULL, "%s: Error reading from control pipe: %d",
 			    __func__, ERRNO);
-			conn.client.sock = INVALID_SOCKET;
-		} else if (conn.client.sock != INVALID_SOCKET) {
+			expire = 0;
+		} else if (conn.client.sock == INVALID_SOCKET) {
 			/*
-			 * Received some work to do. Note that the conditional
-			 * above tests accepted socket for INVALID_SOCKET.
-			 * It could be INVALID_SOCKET when mg_stop() was
-			 * called. mg_stop() sends INVALID_SOCKETs to all
-			 * waiting threads to force them to exit.
+			 * This is a wakeup from the master thread, or from
+			 * the mg_stop() function.
 			 */
+			continue;
+		} else {
 			ctx->num_idle--;
 			ctx->num_active++;
 			assert(ctx->num_idle >= 0);
@@ -3710,11 +3713,15 @@ worker_loop(struct mg_context *ctx)
 			}
 
 			close_connection(&conn);
-			ctx->num_active--;
+
 			ctx->num_idle++;
+			ctx->num_active--;
 			assert(ctx->num_active >= 0);
+
+			/* Advance expiration time in the future */
+			expire = time(NULL) + atoi(ctx->options[OPT_IDLE_TIME]) + 1;
 		}
-	} while (conn.client.sock != INVALID_SOCKET);
+	}
 
 	ctx->num_idle--;
 }
@@ -3742,19 +3749,31 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 		while (ctx->num_active >= ctx->max_threads)
 			sleep(0);
 
-		/* Start a new thread i	f needed */
+		/* Start a new thread if needed */
 		if (ctx->num_idle == 0)
 			start_thread((mg_thread_func_t) worker_loop, ctx);
 
 		/* Send accepted socket to some of the worker threads */
 		accepted.is_ssl = listener->is_ssl;
-		if (send(ctx->ctl[0], (void *) &accepted,
-		    sizeof(accepted), 0) != sizeof(accepted)) {
+		if (write(ctx->ctl[1], (void *) &accepted,
+		    sizeof(accepted)) != sizeof(accepted)) {
 			cry(NULL, "%s control socket error: %s",
 			    __func__, strerror(errno));
 			(void) closesocket(accepted.sock);
 		}
 	}
+}
+
+static void
+wakeup_worker_threads(const struct mg_context *ctx, int num_wakeups)
+{
+	struct socket	fake;
+	int		i;
+
+	/* Send INVALID_SOCKET to threads */
+	fake.sock = INVALID_SOCKET;
+	for (i = 0; i < num_wakeups; i++)
+		(void) write(ctx->ctl[1], (void *) &fake, sizeof(fake));
 }
 
 static void
@@ -3769,8 +3788,10 @@ listening_loop(struct mg_context *ctx)
 		max_fd = -1;
 
 		/* Add listening sockets to the read set */
+		mg_lock(ctx);
 		for (i = 0; i < ctx->num_listeners; i++)
 			add_to_set(ctx->listeners[i].sock, &read_set, &max_fd);
+		mg_unlock(ctx);
 
 		tv.tv_sec = 1;
 		tv.tv_usec = 0;
@@ -3786,11 +3807,16 @@ listening_loop(struct mg_context *ctx)
 			Sleep(1000);
 #endif /* _WIN32 */
 		} else {
+			mg_lock(ctx);
 			for (i = 0; i < ctx->num_listeners; i++)
 				if (FD_ISSET(ctx->listeners[i].sock, &read_set))
 					accept_new_connection(
 					    ctx->listeners + i, ctx);
+			mg_unlock(ctx);
 		}
+
+		/* Send wakeups to idle threads only */
+		wakeup_worker_threads(ctx, ctx->num_idle);
 	}
 
 	/* Stop signal received: somebody called mg_stop. Quit. */
@@ -3800,62 +3826,15 @@ listening_loop(struct mg_context *ctx)
 void
 mg_stop(struct mg_context *ctx)
 {
-	struct socket	fake;
-	int		i;
-
 	ctx->stop_flag = 1;
 
-	/* Send INVALID_SOCKET to all threads */
-	fake.sock = INVALID_SOCKET;
-	for (i = 0; i < ctx->num_idle + ctx->num_active; i++)
-		(void) send(ctx->ctl[0], (void *) &fake, sizeof(fake), 0);
+	wakeup_worker_threads(ctx, ctx->num_active + ctx->num_idle);
 
 	/* Wait until mg_fini() stops */
 	while (ctx->stop_flag != 2)
 		sleep(0);
 
 	free(ctx);
-}
-
-/*
- * Create control UDP socket pair, used by master thread to send an
- * accepted client sockets down to the worker threads.
- */
-static bool_t
-create_control_socket_pair(SOCKET sp[2])
-{
-	struct sockaddr_in	sa;
-	socklen_t		len = sizeof(sa);
-	bool_t			ret;
-
-	sp[0] = socket(PF_INET, SOCK_DGRAM, 0);
-	sp[1] = socket(PF_INET, SOCK_DGRAM, 0);
-
-	(void) memset(&sa, 0, sizeof(sa));
-	sa.sin_family 		= AF_INET;
-	sa.sin_port		= htons(0);
-	sa.sin_addr.s_addr	= htonl(INADDR_LOOPBACK);
-
-	if ((sp[0] = socket(PF_INET, SOCK_DGRAM, 0)) != INVALID_SOCKET &&
-	    (sp[1] = socket(PF_INET, SOCK_DGRAM, 0)) != INVALID_SOCKET	&&
-	    !bind(sp[1], (struct sockaddr *) &sa, len) &&
-	    !getsockname(sp[1], (struct sockaddr *) &sa, &len) &&
-	    !connect(sp[0], (struct sockaddr *) &sa, len)) {
-
-		/* Success */
-		ret = TRUE;
-		set_close_on_exec(sp[0]);
-		set_close_on_exec(sp[1]);
-	} else {
-		/* Failure, close descriptors */
-		if (sp[0] != INVALID_SOCKET)
-			(void) closesocket(sp[0]);
-		if (sp[1] != INVALID_SOCKET)
-			(void) closesocket(sp[1]);
-		ret = FALSE;
-	}
-
-	return (ret);
 }
 
 struct mg_context *
@@ -3872,11 +3851,12 @@ mg_start(void)
 	if ((ctx = (struct mg_context *) calloc(1, sizeof(*ctx))) == NULL) {
 		cry(NULL, "cannot allocate mongoose context");
 		return (NULL);
-	} else if (!create_control_socket_pair(ctx->ctl)) {
-		cry(NULL, "Cannot create control socket: %d", ERRNO);
+	} else if (pipe(ctx->ctl) != 0) {
+		cry(NULL, "Cannot create control pipe: %d", ERRNO);
 		free(ctx);
 		return (NULL);
 	}
+
 	/* Initialize options. First pass: set default option values */
 	for (i = 0; known_options[i].name != NULL; i++)
 		ctx->options[setters[i].context_index] =
