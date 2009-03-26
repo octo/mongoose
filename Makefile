@@ -1,6 +1,6 @@
 PROG=	mongoose
 SRCS=	main.c mongoose.c
-COPT=	-W -Wall -std=c99 -pedantic #-Os -s
+COPT=	-W -Wall -std=c99 -pedantic -Os -s
 
 # Possible flags: (in brackets are rough numbers for 'gcc -O2' on i386)
 # -DHAVE_MD5		- use system md5 library (-2kb)
@@ -24,7 +24,7 @@ bsd:
 
 rtems:
 	$(CC) -c $(COPT) $(CFLAGS) mongoose.c compat_rtems.c
-	$(AR) -r lib$(PROG).a *.o && ranlib lib$(PROG).a 
+	$(AR) -r lib$(PROG).a *.o && ranlib lib$(PROG).a
 
 # To build on Windows, follow these steps:
 # 1. Download and install Visual Studio Express 2008 to c:\msvc8
@@ -58,7 +58,7 @@ mingwdll:
 		-shared -Wl,--out-implib=$(PROG).lib -o $(PROG).dll
 
 mingwexe:
-	gcc $(MINGWOPT) $(SRCS) -lws2_32 -ladvapi32 -o $(PROG).exe 
+	gcc $(MINGWOPT) $(SRCS) -lws2_32 -ladvapi32 -o $(PROG).exe
 
 man:
 	cat mongoose.1 | tbl | groff -man -Tascii | col -b > mongoose.1.txt
