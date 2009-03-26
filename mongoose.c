@@ -187,11 +187,9 @@ enum {FALSE, TRUE};
 
 typedef int bool_t;
 typedef void * (*mg_thread_func_t)(void *);
-static void cry(const char *, ...);
 
 static int tz_offset;
 static const char *http_500_error = "Internal Server Error";
-static FILE *error_log;
 
 /*
  * Snatched from OpenSSL includes. I put the prototypes here to be independent
@@ -376,14 +374,24 @@ struct mg_connection {
  * Print error message to the opened error log stream.
  */
 static void
-cry(const char *fmt, ...)
+cry(const struct mg_connection *conn, const char *fmt, ...)
 {
 	FILE	*fp;
+	time_t	timestamp;
 	va_list	ap;
 
-	fp = error_log == NULL ? stderr : error_log;
+	fp = (conn == NULL || conn->ctx->error_log == NULL) ?
+		stderr : conn->ctx->error_log;
 
 	flockfile(fp);
+
+	timestamp = time(NULL);
+	(void) fprintf(fp, "[%.*s] [error] [client %s] ",
+	    24, ctime(&timestamp),  /* Print 25 characters, no trailing \n */
+	    conn == NULL ? "-": inet_ntoa(conn->client.usa.u.sin.sin_addr));
+	if (conn != NULL)
+		(void) fprintf(fp, "%s %s: ",
+		    conn->request_info.request_method, conn->request_info.uri);
 
 	va_start(ap, fmt);
 	(void) vfprintf(fp, fmt, ap);
@@ -474,10 +482,11 @@ mg_vsnprintf(char *buf, size_t buflen, const char *fmt, va_list ap)
 	n = vsnprintf(buf, buflen, fmt, ap);
 
 	if (n < 0) {
-		cry("vsnprintf error");
+		cry(NULL, "vsnprintf error");
 		n = 0;
 	} else if (n >= (int) buflen) {
-		cry("truncating vsnprintf buffer");
+		cry(NULL, "truncating vsnprintf buffer: [%.*s]",
+		    n > 200 ? 200 : n);
 		n = (int) buflen - 1;
 	}
 	buf[n] = '\0';
@@ -647,6 +656,7 @@ send_error(struct mg_connection *conn, int status, const char *reason,
 			len = mg_vsnprintf(buf, sizeof(buf), fmt, ap);
 			va_end(ap);
 			conn->num_bytes_sent += mg_write(conn, buf, len);
+			cry(conn, "%s", buf);
 		}
 	}
 }
@@ -716,7 +726,7 @@ to_unicode(const char *path, wchar_t *wbuf, size_t wbuf_len)
 	 * actually opens "a.cgi", and does not return an error!
 	 */
 	if (*p == 0x20 || *p == 0x2e || *p == 0x2b || (*p & ~0x7f)) {
-		cry("Rejecting suspicious path: [%s]", buf);
+		cry(NULL, "Rejecting suspicious path: [%s]", buf);
 		buf[0] = '\0';
 	}
 
@@ -895,7 +905,8 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 
 	if (CreateProcessA(NULL, cmdline, NULL, NULL, TRUE,
 	    CREATE_NEW_PROCESS_GROUP, envblk, line, &si, &pi) == 0) {
-		cry("%s: CreateProcess(%s): %d", __func__, cmdline, ERRNO);
+		cry(conn, "%s: CreateProcess(%s): %d",
+		    __func__, cmdline, ERRNO);
 		retval = FALSE;
 	} else {
 		close(fd_stdin);
@@ -969,7 +980,7 @@ start_thread(void * (*func)(void *), void *param)
 	(void) pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
 	if ((retval = pthread_create(&thread_id, &attr, func, param)) != 0)
-		cry("%s: %s", __func__, strerror(retval));
+		cry(NULL, "%s: %s", __func__, strerror(retval));
 
 	return (retval);
 }
@@ -994,15 +1005,18 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	} else if (pid == 0) {
 		/* Child */
 		if (chdir(dir) != 0) {
-			cry("chdir(%s): %s", dir, strerror(ERRNO));
+			cry(conn, "%s: chdir(%s): %s",
+			    __func__, dir, strerror(ERRNO));
 		} else if (dup2(fd_stdin, 0) == -1) {
-			cry("dup2(stdin, %d): %s", fd_stdin, strerror(ERRNO));
+			cry(conn, "%s: dup2(stdin, %d): %s",
+			    __func__, fd_stdin, strerror(ERRNO));
 		} else if (dup2(fd_stdout, 1) == -1) {
-			cry("dup2(stdout, %d): %s", fd_stdout, strerror(ERRNO));
+			cry(conn, "%s: dup2(stdout, %d): %s",
+			    __func__, fd_stdout, strerror(ERRNO));
 		} else {
 			/* If error file is specified, send errors there */
-			if (error_log != NULL)
-				(void) dup2(fileno(error_log), 2);
+			if (conn->ctx->error_log != NULL)
+				(void) dup2(fileno(conn->ctx->error_log), 2);
 
 			(void) close(fd_stdin);
 			(void) close(fd_stdout);
@@ -1011,11 +1025,12 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 			interp = conn->ctx->options[OPT_CGI_INTERPRETER];
 			if (interp == NULL) {
 				(void) execle(prog, prog, NULL, envp);
-				cry("execle(%s): %s", prog, strerror(ERRNO));
+				cry(conn, "%s: execle(%s): %s",
+				    __func__, prog, strerror(ERRNO));
 			} else {
 				(void) execle(interp, interp, prog, NULL, envp);
-				cry("execle(%s %s): %s",
-				    interp, prog, strerror(ERRNO));
+				cry(conn, "%s: execle(%s %s): %s",
+				    __func__, interp, prog, strerror(ERRNO));
 			}
 		}
 		exit(EXIT_FAILURE);
@@ -1035,14 +1050,14 @@ static void
 mg_lock(struct mg_context *ctx)
 {
 	if (pthread_mutex_lock(&ctx->opt_mutex) != 0)
-		cry("pthread_mutex_lock: %s", strerror(ERRNO));
+		cry(NULL, "pthread_mutex_lock: %s", strerror(ERRNO));
 }
 
 static void
 mg_unlock(struct mg_context *ctx)
 {
 	if (pthread_mutex_unlock(&ctx->opt_mutex) != 0)
-		cry("pthread_mutex_unlock: %s", strerror(ERRNO));
+		cry(NULL, "pthread_mutex_unlock: %s", strerror(ERRNO));
 }
 
 /*
@@ -1294,7 +1309,7 @@ mg_open_listening_port(int port)
 		set_close_on_exec(sock);
 	} else {
 		/* Error */
-		cry("open_listening_port(%d): %s", port, strerror(errno));
+		cry(NULL, "%s(%d): %s", __func__, port, strerror(errno));
 		if (sock != INVALID_SOCKET)
 			(void) closesocket(sock);
 		sock = INVALID_SOCKET;
@@ -1780,7 +1795,7 @@ open_auth_file(struct mg_context *ctx, const char *path)
 	if (ctx->options[OPT_AUTH_GPASSWD] != NULL) {
 		/* Use global passwords file */
 		if ((fp = fopen(ctx->options[OPT_AUTH_GPASSWD], "r")) == NULL)
-			cry("fopen(%s): %s",
+			cry(NULL, "fopen(%s): %s",
 			    ctx->options[OPT_AUTH_GPASSWD], strerror(ERRNO));
 	} else if (!mg_stat(path, &st) && st.is_directory) {
 		(void) mg_snprintf(name, sizeof(name), "%s%c%s",
@@ -1935,8 +1950,8 @@ check_authorization(struct mg_connection *conn, const char *path)
 			mg_strlcpy(protected_path, p + 1, n);
 
 			if ((fp = fopen(protected_path, "r")) == NULL)
-				cry("check_auth: cannot open %s: %s",
-				    protected_path, strerror(errno));
+				cry(conn, "%s: cannot open %s: %s",
+				    __func__, protected_path, strerror(errno));
 			break;
 		}
 	}
@@ -2342,7 +2357,7 @@ mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
 	struct callback	*cb;
 
 	if (ctx->num_callbacks >= (int) ARRAY_SIZE(ctx->callbacks) - 1) {
-		cry("Too many callbacks! Increase MAX_CALLBACKS.");
+		cry(NULL, "Too many callbacks! Increase MAX_CALLBACKS.");
 	} else {
 		cb = &ctx->callbacks[ctx->num_callbacks];
 		cb->uri_regex = uri_regex ? mg_strdup(uri_regex) : NULL;
@@ -2785,12 +2800,12 @@ do_ssi_include(struct mg_connection *conn, const char *ssi, char *tag)
 		(void) mg_snprintf(path + strlen(path),
 		    sizeof(path) - strlen(path), "%s", file_name);
 	} else {
-		cry("Bad SSI #include: [%s]", tag);
+		cry(conn, "Bad SSI #include: [%s]", tag);
 		return;
 	}
 
 	if ((fp = fopen(path, "rb")) == NULL) {
-		cry("Cannot open SSI #include: [%s]: fopen(%s): %s",
+		cry(conn, "Cannot open SSI #include: [%s]: fopen(%s): %s",
 		    tag, path, strerror(ERRNO));
 	} else {
 		set_close_on_exec(fileno(fp));
@@ -2806,9 +2821,9 @@ do_ssi_exec(struct mg_connection *conn, char *tag)
 	FILE	*fp;
 
 	if (sscanf(tag, " \"%[^\"]\"", cmd) != 1) {
-		cry("Bad SSI #exec: [%s]", tag);
+		cry(conn, "Bad SSI #exec: [%s]", tag);
 	} else if ((fp = popen(cmd, "r")) == NULL) {
-		cry("Cannot SSI #exec: [%s]: %s", cmd, strerror(ERRNO));
+		cry(conn, "Cannot SSI #exec: [%s]: %s", cmd, strerror(ERRNO));
 	} else {
 		send_opened_file_stream(conn, fileno(fp), ~0ULL);
 		(void) pclose(fp);
@@ -2839,8 +2854,8 @@ send_ssi_file(struct mg_connection *conn, const char *path, FILE *fp)
 				} else if (!memcmp(buf + 5, "exec", 4)) {
 					do_ssi_exec(conn, buf + 9);
 				} else {
-					cry("%s: unknown SSI command: \"%s\"",
-						path, buf);
+					cry(conn, "%s: unknown SSI "
+					    "command: \"%s\"", path, buf);
 				}
 			}
 			len = 0;
@@ -2849,7 +2864,7 @@ send_ssi_file(struct mg_connection *conn, const char *path, FILE *fp)
 				/* Not an SSI tag */
 				in_ssi_tag = FALSE;
 			} else if (len == (int) sizeof(buf) - 2) {
-				cry("%s: SSI tag is too large", path);
+				cry(conn, "%s: SSI tag is too large", path);
 				len = 0;
 			}
 			buf[len++] = ch & 0xff;
@@ -2921,7 +2936,7 @@ analyze_request(struct mg_connection *conn)
 #if !defined(NO_AUTH)
 	if (strstr(path, PASSWORDS_FILE_NAME)) {
 		/* Do not allow to view passwords files */
-		send_error(conn, 403, "Forbidden", "");
+		send_error(conn, 403, "Forbidden", "Access Forbidden");
 	} else if ((!strcmp(ri->request_method, "PUT") ||
 	    !strcmp(ri->request_method, "DELETE")) &&
 	    (conn->ctx->options[OPT_AUTH_PUT] == NULL ||
@@ -2938,7 +2953,7 @@ analyze_request(struct mg_connection *conn)
 	} else
 #endif /* NO_AUTH */
 	if (mg_stat(path, &st) != 0) {
-		send_error(conn, 404, "Not Found", "%s", "");
+		send_error(conn, 404, "Not Found", "%s", "File not found");
 	} else if (st.is_directory && uri[strlen(uri) - 1] != '/') {
 		(void) mg_printf(conn,
 		    "HTTP/1.1 301 Moved Permanently\r\n"
@@ -3000,14 +3015,14 @@ set_ports_option(struct mg_context *ctx, const char *p)
 
 		if (ctx->num_listeners >=
 		    (int) (ARRAY_SIZE(ctx->listeners) - 1)) {
-			cry("%s", "Too many listeninig sockets");
+			cry(NULL, "%s", "Too many listeninig sockets");
 			return (FALSE);
 		} else if ((sock = mg_open_listening_port(port)) == -1) {
-			cry("cannot open port %d", port);
+			cry(NULL, "cannot open port %d", port);
 			return (FALSE);
 		} else if (is_ssl == TRUE && ctx->ssl_ctx == NULL) {
 			(void) closesocket(sock);
-			cry("cannot add SSL socket, "
+			cry(NULL, "cannot add SSL socket, "
 			    "please specify certificate file");
 			return (FALSE);
 		} else {
@@ -3071,41 +3086,43 @@ isbyte(int n) {
 	return (n >= 0 && n <= 255);
 }
 
-static bool_t
-check_acl(struct mg_context *ctx, const struct usa *usa)
+/*
+ * Verify given socket address against the ACL.
+ * Return -1 if ACL is malformed, 0 if address is disallowed, 1 if allowed.
+ */
+static int
+check_acl(const char *acl, const struct usa *usa)
 {
 	int		a, b, c, d, n, mask, allowed;
-	char		flag, *s;
+	char		flag;
 	size_t		len;
 	uint32_t	acl_subnet, acl_mask, remote_ip;
 
 	(void) memcpy(&remote_ip, &usa->u.sin.sin_addr, sizeof(remote_ip));
 
-	mg_lock(ctx);
-	s = ctx->options[OPT_ACL];
-
-	/* Allow by default, if no ACL is set */
-	if (s == NULL) {
-		mg_unlock(ctx);
-		return (TRUE);
-	}
-
 	/* If any ACL is set, deny by default */
 	allowed = '-';
-	FOR_EACH_WORD_IN_LIST(s, len) {
+	FOR_EACH_WORD_IN_LIST(acl, len) {
 
 		mask = 32;
 
-		if (sscanf(s, "%c%d.%d.%d.%d%n",&flag,&a,&b,&c,&d,&n) != 5) {
-			cry("[%s]: subnet must be [+|-]x.x.x.x[/x]", s);
+		if (sscanf(acl, "%c%d.%d.%d.%d%n",&flag,&a,&b,&c,&d,&n) != 5) {
+			cry(NULL, "%s: subnet must be [+|-]x.x.x.x[/x]",
+			    __func__);
+			return (-1);
 		} else if (flag != '+' && flag != '-') {
-			cry("flag must be + or -: [%s]", s);
+			cry(NULL, "%s: flag must be + or -: [%s]",
+			    __func__, acl);
+			return (-1);
 		} else if (!isbyte(a)||!isbyte(b)||!isbyte(c)||!isbyte(d)) {
-			cry("bad ip address: [%s]", s);
-		} else if (sscanf(s + n, "/%d", &mask) == 0) {
+			cry(NULL, "%s: bad ip address: [%s]", __func__, acl);
+			return (-1);
+		} else if (sscanf(acl + n, "/%d", &mask) == 0) {
 			/* Do nothing, no mask specified */
 		} else if (mask < 0 || mask > 32) {
-			cry("bad subnet mask: %d [%s]", n, s);
+			cry(NULL, "%s: bad subnet mask: %d [%s]",
+			    __func__, n, acl);
+			return (-1);
 		}
 
 		acl_subnet = (a << 24) | (b << 16) | (c << 8) | d;
@@ -3114,9 +3131,8 @@ check_acl(struct mg_context *ctx, const struct usa *usa)
 		if (acl_subnet == (ntohl(remote_ip) & acl_mask))
 			allowed = flag;
 	}
-	mg_unlock(ctx);
 
-	return (allowed == '+');
+	return (allowed == '+' ? 1 : 0);
 }
 
 static void
@@ -3181,11 +3197,11 @@ set_uid_option(struct mg_context *ctx, const char *uid)
 	ctx = NULL; /* Unused */
 
 	if ((pw = getpwnam(uid)) == NULL)
-		cry("%s: unknown user [%s]", __func__, uid);
+		cry(NULL, "%s: unknown user [%s]", __func__, uid);
 	else if (setgid(pw->pw_gid) == -1)
-		cry("%s: setgid(%s): %s", __func__, uid, strerror(errno));
+		cry(NULL, "%s: setgid(%s): %s", __func__, uid, strerror(errno));
 	else if (setuid(pw->pw_uid) == -1)
-		cry("%s: setuid(%s): %s", __func__, uid, strerror(errno));
+		cry(NULL, "%s: setuid(%s): %s", __func__, uid, strerror(errno));
 	else
 		retval = TRUE;
 
@@ -3214,7 +3230,7 @@ set_ssl_option(struct mg_context *ctx, const char *pem)
 
 	/* Load SSL library dynamically */
 	if ((lib = dlopen(SSL_LIB, RTLD_LAZY)) == NULL) {
-		cry("set_ssl_option: cannot load %s", SSL_LIB);
+		cry(NULL, "%s: cannot load %s", __func__, SSL_LIB);
 		return (FALSE);
 	}
 
@@ -3231,7 +3247,7 @@ set_ssl_option(struct mg_context *ctx, const char *pem)
 		u.p = dlsym(lib, fp->name);
 #endif /* _WIN32 */
 		if (u.fp == NULL) {
-			cry("set_ssl_option: cannot find %s", fp->name);
+			cry(NULL, "%s: cannot find %s", __func__, fp->name);
 			return (FALSE);
 		} else {
 			fp->ptr = u.fp;
@@ -3242,16 +3258,16 @@ set_ssl_option(struct mg_context *ctx, const char *pem)
 	SSL_library_init();
 
 	if ((CTX = SSL_CTX_new(SSLv23_server_method())) == NULL)
-		cry("SSL_CTX_new error");
+		cry(NULL, "SSL_CTX_new error");
 	else if (ctx->ssl_password_callback != NULL)
 		SSL_CTX_set_default_passwd_cb(CTX, ctx->ssl_password_callback);
 
 	if (CTX != NULL && SSL_CTX_use_certificate_file(
 	    CTX, pem, SSL_FILETYPE_PEM) == 0)
-		cry("cannot open %s", pem);
+		cry(NULL, "%s: cannot open %s", __func__, pem);
 	else if (CTX != NULL && SSL_CTX_use_PrivateKey_file(
 	    CTX, pem, SSL_FILETYPE_PEM) == 0)
-		cry("cannot open %s", pem);
+		cry(NULL, "%s: cannot open %s", NULL, pem);
 	else
 		retval = TRUE;
 
@@ -3272,8 +3288,7 @@ open_log_file(FILE **fpp, const char *path)
 	if (path == NULL) {
 		*fpp = NULL;
 	} else if ((*fpp = fopen(path, "a")) == NULL) {
-		cry("cannot open log file %s: %s",
-		    path, strerror(errno));
+		cry(NULL, "%s(%s): %s", __func__, path, strerror(errno));
 		retval = FALSE;
 	} else {
 		set_close_on_exec(fileno(*fpp));
@@ -3370,6 +3385,15 @@ set_admin_uri_option(struct mg_context *ctx, const char *uri)
 	return (TRUE);
 }
 
+static bool_t
+set_acl_option(struct mg_context *ctx, const char *acl)
+{
+	struct usa	fake;
+
+	ctx = NULL;
+	return (check_acl(acl, &fake) != -1);
+}
+
 static const struct mg_option known_options[] = {
 	{"root", "\tWeb root directory", NULL},
 	{"index_files",	"Index files", "index.html,index.htm,index.cgi"},
@@ -3431,7 +3455,7 @@ static const struct option_setter {
 	{OPT_ERROR_LOG,		&set_elog_option},
 	{OPT_ALIASES,		NULL},
 	{OPT_ADMIN_URI,		&set_admin_uri_option},
-	{OPT_ACL,		NULL},
+	{OPT_ACL,		&set_acl_option},
 	{OPT_MAX_THREADS,	&set_max_threads_option},
 	{OPT_IDLE_TIME,		NULL},
 	{-1,			NULL}
@@ -3652,7 +3676,8 @@ worker_loop(struct mg_context *ctx)
 			conn.client.sock = INVALID_SOCKET;
 		} else if (recv(ctx->ctl[1], (void *) &conn.client,
 		    sizeof(conn.client), 0) != sizeof(conn.client)) {
-			cry("Error reading from control socket: %d", ERRNO);
+			cry(NULL, "%s: Error reading from control socket: %d",
+			    __func__, ERRNO);
 			conn.client.sock = INVALID_SOCKET;
 		} else if (conn.client.sock != INVALID_SOCKET) {
 			/*
@@ -3672,13 +3697,14 @@ worker_loop(struct mg_context *ctx)
 
 			if (conn.client.is_ssl &&
 			    (conn.ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
-				cry("%s: SSL_new: %d", __func__, ERRNO);
+				cry(&conn, "%s: SSL_new: %d", __func__, ERRNO);
 			} else if (conn.client.is_ssl &&
 			    SSL_set_fd(conn.ssl, conn.client.sock) != 1) {
-				cry("%s: SSL_set_fd: %d", __func__, ERRNO);
+				cry(&conn, "%s: SSL_set_fd: %d",
+				    __func__, ERRNO);
 			} else if (conn.client.is_ssl &&
 			    SSL_accept(conn.ssl) != 1) {
-				cry("%s: SSL handshake failed", __func__);
+				cry(&conn, "%s: SSL handshake error", __func__);
 			} else {
 				process_new_connection(&conn);
 			}
@@ -3702,9 +3728,10 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 
 	if ((accepted.sock = accept(listener->sock,
 	    &accepted.usa.u.sa, &accepted.usa.len)) == INVALID_SOCKET) {
-		cry("%s: accept: %d", __func__, ERRNO);
-	} else if (!check_acl(ctx, &accepted.usa)) {
-		cry("%s: %s is not allowed to connect",
+		cry(NULL, "%s: accept: %d", __func__, ERRNO);
+	} else if (ctx->options[OPT_ACL] != NULL &&
+	    !check_acl(ctx->options[OPT_ACL], &accepted.usa)) {
+		cry(NULL, "%s: %s is not allowed to connect",
 		    __func__, inet_ntoa(accepted.usa.u.sin.sin_addr));
 		(void) closesocket(accepted.sock);
 	} else {
@@ -3723,7 +3750,7 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 		accepted.is_ssl = listener->is_ssl;
 		if (send(ctx->ctl[0], (void *) &accepted,
 		    sizeof(accepted), 0) != sizeof(accepted)) {
-			cry("%s control socket error: %s",
+			cry(NULL, "%s control socket error: %s",
 			    __func__, strerror(errno));
 			(void) closesocket(accepted.sock);
 		}
@@ -3843,10 +3870,10 @@ mg_start(void)
 #endif /* _WIN32 */
 
 	if ((ctx = (struct mg_context *) calloc(1, sizeof(*ctx))) == NULL) {
-		cry("cannot allocate mongoose context");
+		cry(NULL, "cannot allocate mongoose context");
 		return (NULL);
 	} else if (!create_control_socket_pair(ctx->ctl)) {
-		cry("Cannot create control socket: %d", ERRNO);
+		cry(NULL, "Cannot create control socket: %d", ERRNO);
 		free(ctx);
 		return (NULL);
 	}
