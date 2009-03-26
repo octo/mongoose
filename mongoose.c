@@ -3884,7 +3884,9 @@ mg_start(void)
 	 * Ignore SIGPIPE signal, so if browser cancels the request, it
 	 * won't kill the whole process.
 	 */
+#if !defined(_WIN32)
 	(void) signal(SIGPIPE, SIG_IGN);
+#endif /* _WIN32 */
 
 	/* Start master (listening) thread */
 	(void) pthread_mutex_init(&ctx->opt_mutex, NULL);
