@@ -3703,7 +3703,6 @@ worker_loop(struct mg_context *ctx)
 	struct mg_connection	conn;
 	time_t			expire;
 
-	ctx->num_idle++;
 	expire = time(NULL) + atoi(ctx->options[OPT_IDLE_TIME]) + 1;
 
 	while (time(NULL) < expire && ctx->stop_flag == 0) {
@@ -3789,8 +3788,9 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 			sleep(0);
 
 		/* Start a new thread if needed */
-		if (ctx->num_idle == 0)
-			start_thread((mg_thread_func_t) worker_loop, ctx);
+		if (ctx->num_idle == 0 &&
+		    start_thread((mg_thread_func_t) worker_loop, ctx) == 0)
+				ctx->num_idle++;
 
 		/* Send accepted socket to some of the worker threads */
 		accepted.is_ssl = listener->is_ssl;
