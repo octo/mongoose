@@ -161,6 +161,7 @@ do_unit_test();
 
 # Spawn the server on port $port
 my $cmd = "$exe -ports $port -access_log access.log -error_log debug.log ".
+		"-cgi_env CGI_FOO=foo,CGI_BAR=bar,CGI_BAZ=baz " .
 		"-root test -aliases $alias -admin_uri /hh";
 $cmd .= ' -cgi_interp perl' if on_windows();
 spawn($cmd);
@@ -303,6 +304,10 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 		'HTTP/1.1 404', 'CGI Win32 code disclosure (%2e)');
 	o("GET /env.cgi%2b HTTP/1.0\n\r\n",
 		'HTTP/1.1 404', 'CGI Win32 code disclosure (%2b)');
+	o("GET /env.cgi HTTP/1.0\n\r\n", '\nHTTPS=off\n', 'CGI HTTPS');
+	o("GET /env.cgi HTTP/1.0\n\r\n", '\nCGI_FOO=foo\n', '-cgi_env 1');
+	o("GET /env.cgi HTTP/1.0\n\r\n", '\nCGI_BAR=bar\n', '-cgi_env 2');
+	o("GET /env.cgi HTTP/1.0\n\r\n", '\nCGI_BAZ=baz\n', '-cgi_env 3');
 
 	# Check that CGI's current directory is set to script's directory
 	my $copy_cmd = on_windows() ? 'copy' : 'cp';
