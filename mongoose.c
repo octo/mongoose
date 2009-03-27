@@ -278,7 +278,7 @@ struct mgstat {
  */
 enum mg_option_index {
 	OPT_ROOT, OPT_INDEX_FILES, OPT_PORTS, OPT_DIR_LIST, OPT_CGI_EXTENSIONS,
-	OPT_CGI_INTERPRETER, OPT_SSI_EXTENSIONS, OPT_AUTH_DOMAIN,
+	OPT_CGI_INTERPRETER, OPT_CGI_ENV, OPT_SSI_EXTENSIONS, OPT_AUTH_DOMAIN,
 	OPT_AUTH_GPASSWD, OPT_AUTH_PUT, OPT_ACCESS_LOG, OPT_ERROR_LOG,
 	OPT_SSL_CERTIFICATE, OPT_ALIASES, OPT_ACL, OPT_UID,
 	OPT_PROTECT, OPT_SERVICE, OPT_HIDE, OPT_ADMIN_URI, OPT_MAX_THREADS,
@@ -2531,7 +2531,7 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 {
 	const char	*s, *script_filename, *root;
 	char		*p;
-	int		i;
+	int		i, len;
 
 	blk->len = blk->nvars = 0;
 
@@ -2560,6 +2560,7 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 	addenv(blk, "SCRIPT_NAME=%s", prog + strlen(root));
 	addenv(blk, "SCRIPT_FILENAME=%s", script_filename);	/* PHP */
 	addenv(blk, "PATH_TRANSLATED=%s", prog);
+	addenv(blk, "HTTPS=%s", conn->ssl == NULL ? "off" : "on");
 
 	if ((s = mg_get_header(conn, "Content-Type")) != NULL)
 		addenv(blk, "CONTENT_TYPE=%s", s);
@@ -2604,6 +2605,16 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 			*p = toupper(* (unsigned char *) p) & 0xff;
 		}
 	}
+
+	/* Add user-specified variables */
+	mg_lock(conn->ctx);
+	if (conn->ctx->options[OPT_CGI_ENV] != NULL) {
+		s = conn->ctx->options[OPT_CGI_ENV];
+		FOR_EACH_WORD_IN_LIST(s, len) {
+			addenv(blk, "%.*s", len, s);
+		}
+	}
+	mg_unlock(conn->ctx);
 
 	blk->vars[blk->nvars++] = NULL;
 	blk->buf[blk->len++] = '\0';
@@ -3424,6 +3435,7 @@ static const struct mg_option known_options[] = {
 #if !defined(NO_CGI)
 	{"cgi_ext", "CGI extensions", "cgi,pl,php"},
 	{"cgi_interp", "CGI interpreter to use with all CGI scripts", NULL},
+	{"cgi_env", "Custom CGI enviroment variables", NULL},
 #endif /* NO_CGI */
 	{"ssi_ext", "SSI extensions", "shtml,shtm"},
 #if !defined(NO_AUTH)
@@ -3459,6 +3471,7 @@ static const struct option_setter {
 #if !defined(NO_CGI)
 	{OPT_CGI_EXTENSIONS,	NULL},
 	{OPT_CGI_INTERPRETER,	NULL},
+	{OPT_CGI_ENV,		NULL},
 #endif /* NO_CGI */
 	{OPT_SSI_EXTENSIONS,	NULL},
 #if !defined(NO_AUTH)
