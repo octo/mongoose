@@ -1971,7 +1971,7 @@ check_authorization(struct mg_connection *conn, const char *path)
 		authorized = FALSE;
 		if (parse_auth_header(conn, buf, sizeof(buf), &ah)) {
 			cb->func(conn, &conn->request_info, &user_data);
-			authorized = (bool_t) (long) user_data;
+			authorized = (bool_t) (long long) user_data;
 		}
 	}
 
@@ -2531,7 +2531,8 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 {
 	const char	*s, *script_filename, *root;
 	char		*p;
-	int		i, len;
+	int		i;
+	size_t		len;
 
 	blk->len = blk->nvars = 0;
 
