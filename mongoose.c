@@ -107,6 +107,7 @@
 #endif /* !fileno MINGW #defines fileno */
 
 typedef HANDLE pthread_mutex_t;
+typedef int pid_t;
 
 #if !defined(S_ISDIR)
 #define S_ISDIR(x)		((x) & _S_IFDIR)
@@ -843,14 +844,13 @@ start_thread(void * (*func)(void *), void *param)
 	return (_beginthread((void (__cdecl *)( void *))func, 0, param) == 0);
 }
 
-static bool_t
+static pid_t
 spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		char *envp[], int fd_stdin, int fd_stdout, const char *dir)
 {
 	HANDLE	me;
 	char	*p, *interp, cmdline[FILENAME_MAX], line[FILENAME_MAX];
 	FILE	*fp;
-	bool_t	retval;
 	STARTUPINFOA		si;
 	PROCESS_INFORMATION	pi;
 
@@ -903,19 +903,17 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	    CREATE_NEW_PROCESS_GROUP, envblk, line, &si, &pi) == 0) {
 		cry(conn, "%s: CreateProcess(%s): %d",
 		    __func__, cmdline, ERRNO);
-		retval = FALSE;
+		pi.hProcess = (HANDLE) -1;
 	} else {
 		close(fd_stdin);
 		close(fd_stdout);
-		retval = TRUE;
 	}
 
 	CloseHandle(si.hStdOutput);
 	CloseHandle(si.hStdInput);
 	CloseHandle(pi.hThread);
-	CloseHandle(pi.hProcess);
 
-	return (retval);
+	return ((pid_t) pi.hProcess);
 }
 
 static int
@@ -982,20 +980,17 @@ start_thread(void * (*func)(void *), void *param)
 }
 
 #ifndef NO_CGI
-static bool_t
+static pid_t
 spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		char *envp[], int fd_stdin, int fd_stdout, const char *dir)
 {
-	int		ret;
 	pid_t		pid;
 	const char	*interp;
 
 	envblk = NULL;	/* unused */
-	ret = FALSE;
 
 	if ((pid = fork()) == -1) {
 		/* Parent */
-		ret = -1;
 		send_error(conn, 500, http_500_error,
 		    "fork(): %s", strerror(ERRNO));
 	} else if (pid == 0) {
@@ -1031,13 +1026,12 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		}
 		exit(EXIT_FAILURE);
 	} else {
-		/* Parent. Suspended until child does execle() */
+		/* Parent. Close stdio descriptors */
 		(void) close(fd_stdin);
 		(void) close(fd_stdout);
-		ret = TRUE;
 	}
 
-	return (ret);
+	return (pid);
 }
 #endif /* !NO_CGI */
 #endif /* _WIN32 */
@@ -2622,6 +2616,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	struct cgi_env_block	blk;
 	char			dir[FILENAME_MAX], *p;
 	int			fd_stdin[2], fd_stdout[2];
+	pid_t			pid;
 
 	prepare_cgi_environment(conn, prog, &blk);
 
@@ -2630,6 +2625,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	if ((p = strrchr(dir, DIRSEP)) != NULL)
 		*p++ = '\0';
 
+	pid = -1;
 	fd_stdin[0] = fd_stdin[1] = fd_stdout[0] = fd_stdout[1] = -1;
 	if (pipe(fd_stdin) != 0 || pipe(fd_stdout) != 0) {
 		send_error(conn, 500, http_500_error,
@@ -2637,8 +2633,8 @@ send_cgi(struct mg_connection *conn, const char *prog)
 		goto done;
 	}
 
-	if (!spawn_process(conn, p, blk.buf, blk.vars,
-	    fd_stdin[0], fd_stdout[1], dir)) {
+	if ((pid = spawn_process(conn, p, blk.buf, blk.vars,
+	    fd_stdin[0], fd_stdout[1], dir)) == -1) {
 		goto done;
 	}
 
@@ -2688,18 +2684,37 @@ send_cgi(struct mg_connection *conn, const char *prog)
 		    ri.http_headers[i].value);
 	(void) mg_write(conn, "\r\n", 2);
 
-	/* Send headers, and the rest of the data */
+	/* Send chunk of data that may be read after the headers */
 	conn->num_bytes_sent += mg_write(conn,
 	    buf + headers_len, data_len - headers_len);
-	while ((n = pull(fd_stdout[0],
-	    INVALID_SOCKET, NULL, buf, sizeof(buf))) > 0)
-		conn->num_bytes_sent += mg_write(conn, buf, n);
+
+	/*
+	 * Read the rest of CGI output and send to the client. If read from
+	 * CGI returns 0, CGI has finished output. If it returns < 0,
+	 * some read error occured (CGI process terminated unexpectedly?)
+	 * If write to the client fails, the means client has disconnected
+	 * unexpectedly.
+	 * In all such cases, stop data exchange and do cleanup.
+	 */
+	do {
+		n = pull(fd_stdout[0], INVALID_SOCKET, NULL, buf, sizeof(buf));
+		if (n > 0)
+			n = mg_write(conn, buf, n);
+		if (n > 0)
+			conn->num_bytes_sent += n;
+	} while (n > 0);
 
 done:
-	if (fd_stdin[0] != -1) (void) close(fd_stdin[0]);
-	if (fd_stdin[1] != -1) (void) close(fd_stdin[1]);
-	if (fd_stdout[0] != -1) (void) close(fd_stdout[0]);
-	if (fd_stdout[1] != -1) (void) close(fd_stdout[1]);
+	if (pid > 0)
+		kill(pid, SIGTERM);
+	if (fd_stdin[0] != -1)
+		(void) close(fd_stdin[0]);
+	if (fd_stdin[1] != -1)
+		(void) close(fd_stdin[1]);
+	if (fd_stdout[0] != -1)
+		(void) close(fd_stdout[0]);
+	if (fd_stdout[1] != -1)
+		(void) close(fd_stdout[1]);
 }
 #endif /* !NO_CGI */
 
