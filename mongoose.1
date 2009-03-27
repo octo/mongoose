@@ -115,6 +115,10 @@ decides which interpreter to use by looking at the first line of CGI script.
 Enable/disable directory listing. Default: "1" (enabled).
 .It Fl error_log Ar file
 Error log file. Default: not set, no errors are logged.
+.It Fl idle_time Ar num_seconds
+Number of seconds worker thread waits for some work before exit. Default: 10
+.It Fl max_threads Ar number
+Maximum number of worker threads to start. Default: 100
 .It Fl mime_types Ar list
 Additional to builtin mime types, in form
 "extension1=type1,extension2=type2,...".
