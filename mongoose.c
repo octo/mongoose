@@ -3186,6 +3186,9 @@ mg_fini(struct mg_context *ctx)
 	while (ctx->num_active + ctx->num_idle > 0)
 		sleep(0);
 
+	assert(ctx->num_active == 0);
+	assert(ctx->num_idle == 0);
+
 	/* Deallocate all registered callbacks */
 	for (i = 0; i < ctx->num_callbacks; i++)
 		if (ctx->callbacks[i].uri_regex != NULL)
@@ -3725,8 +3728,8 @@ worker_loop(struct mg_context *ctx)
 			 */
 			continue;
 		} else {
-			ctx->num_idle--;
 			ctx->num_active++;
+			ctx->num_idle--;
 			assert(ctx->num_idle >= 0);
 
 			/* Initialize the rest of attributes */
@@ -3754,7 +3757,8 @@ worker_loop(struct mg_context *ctx)
 			assert(ctx->num_active >= 0);
 
 			/* Advance expiration time in the future */
-			expire = time(NULL) + atoi(ctx->options[OPT_IDLE_TIME]) + 1;
+			expire = time(NULL) +
+			    atoi(ctx->options[OPT_IDLE_TIME]) + 1;
 		}
 	}
 
@@ -3869,6 +3873,9 @@ mg_stop(struct mg_context *ctx)
 	while (ctx->stop_flag != 2)
 		sleep(0);
 
+	assert(ctx->num_active == 0);
+	assert(ctx->num_idle == 0);
+
 	free(ctx);
 }
 
@@ -3915,11 +3922,12 @@ mg_start(void)
 #if 0
 	tm->tm_gmtoff - 3600 * (tm->tm_isdst > 0 ? 1 : 0);
 #endif
+
+#if !defined(_WIN32)
 	/*
 	 * Ignore SIGPIPE signal, so if browser cancels the request, it
 	 * won't kill the whole process.
 	 */
-#if !defined(_WIN32)
 	(void) signal(SIGPIPE, SIG_IGN);
 #endif /* _WIN32 */
 
