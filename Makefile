@@ -34,8 +34,8 @@ rtems:
 # 4. In the command prompt, go to mongoose directory and do "nmake windows"
 
 #WINDBG=	/Zi /DDEBUG /Od
-WINDBG=	/DNDEBUG /Os
-WINOPT=	/MT /TC $(WINDBG) /nologo /DNDEBUG /W4 \
+WINDBG=	/DNDEBUG /Os /Oi /GL /Gy
+WINOPT=	/MT /TC $(WINDBG) /nologo /W4 \
 	/D_CRT_SECURE_NO_WARNINGS /DHAVE_STRTOUI64
 windows: winexe windll
 
