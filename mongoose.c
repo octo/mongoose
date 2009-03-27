@@ -86,13 +86,6 @@
 #define	pclose(x)		_pclose(x)
 #define	access(x, y)		_access(x, y)
 #define	getcwd(x, y)		_getcwd(x, y)
-
-#ifdef HAVE_STRTOUI64
-#define	strtoull(x, y, z)	_strtoui64(x, y, z)
-#else
-#define	strtoull(x, y, z)	strtoul(x, y, z)
-#endif /* HAVE_STRTOUI64 */
-
 #define	write(x, y, z)		_write(x, y, (unsigned) z)
 #define	read(x, y, z)		_read(x, y, (unsigned) z)
 #define	open(x, y, z)		_open(x, y, z)
@@ -102,12 +95,18 @@
 #define	flockfile(x)		_lock_file(x)
 #define	funlockfile(x)		_unlock_file(x)
 
+#ifdef HAVE_STRTOUI64
+#define	strtoull(x, y, z)	_strtoui64(x, y, z)
+#else
+#define	strtoull(x, y, z)	strtoul(x, y, z)
+#endif /* HAVE_STRTOUI64 */
+
 #if !defined(fileno)
 #define	fileno(x)		_fileno(x)
 #endif /* !fileno MINGW #defines fileno */
 
 typedef HANDLE pthread_mutex_t;
-typedef int pid_t;
+typedef HANDLE pid_t;
 
 #if !defined(S_ISDIR)
 #define S_ISDIR(x)		((x) & _S_IFDIR)
@@ -844,6 +843,14 @@ start_thread(void * (*func)(void *), void *param)
 	return (_beginthread((void (__cdecl *)( void *))func, 0, param) == 0);
 }
 
+static int
+kill(pid_t pid, int sig_num)
+{
+	TerminateProcess(pid, sig_num);
+	CloseHandle(pid);
+	return (0);
+}
+
 static pid_t
 spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		char *envp[], int fd_stdin, int fd_stdout, const char *dir)
@@ -903,7 +910,7 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	    CREATE_NEW_PROCESS_GROUP, envblk, line, &si, &pi) == 0) {
 		cry(conn, "%s: CreateProcess(%s): %d",
 		    __func__, cmdline, ERRNO);
-		pi.hProcess = (HANDLE) -1;
+		pi.hProcess = (pid_t) -1;
 	} else {
 		close(fd_stdin);
 		close(fd_stdout);
@@ -2625,7 +2632,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	if ((p = strrchr(dir, DIRSEP)) != NULL)
 		*p++ = '\0';
 
-	pid = -1;
+	pid = (pid_t) -1;
 	fd_stdin[0] = fd_stdin[1] = fd_stdout[0] = fd_stdout[1] = -1;
 	if (pipe(fd_stdin) != 0 || pipe(fd_stdout) != 0) {
 		send_error(conn, 500, http_500_error,
@@ -2634,7 +2641,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	}
 
 	if ((pid = spawn_process(conn, p, blk.buf, blk.vars,
-	    fd_stdin[0], fd_stdout[1], dir)) == -1) {
+	    fd_stdin[0], fd_stdout[1], dir)) == (pid_t) -1) {
 		goto done;
 	}
 
