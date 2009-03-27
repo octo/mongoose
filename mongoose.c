@@ -3788,9 +3788,19 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 			sleep(0);
 
 		/* Start a new thread if needed */
-		if (ctx->num_idle == 0 &&
-		    start_thread((mg_thread_func_t) worker_loop, ctx) == 0)
-				ctx->num_idle++;
+		if (ctx->num_idle == 0) {
+			/*
+			 * Sequence is important here: first num_idle must
+			 * be incremented, and then new thread started.
+			 * Otherwise, worker thread may do num_idle--
+			 * before master does num_idle++, breaking the assert.
+			 * Thanks to blavier@adeneo.eu for helping to
+			 * debug this.
+			 * TODO: add error check for start_thread().
+			 */
+			ctx->num_idle++;
+			start_thread((mg_thread_func_t) worker_loop, ctx);
+		}
 
 		/* Send accepted socket to some of the worker threads */
 		accepted.is_ssl = listener->is_ssl;
