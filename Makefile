@@ -16,10 +16,14 @@ all:
 	@echo "make (linux|bsd|mac|windows|mingw|rtems)"
 
 linux:
+	$(CC) $(COPT) $(CFLAGS) -D_POSIX_SOURCE -D_BSD_SOURCE \
+		mongoose.c -shared -fPIC -fpic -ldl -lpthread -s -o _$(PROG$).so
 	$(CC) $(COPT) $(CFLAGS)  -D_POSIX_SOURCE -D_BSD_SOURCE \
 		$(SRCS) -ldl -lpthread -s -o $(PROG)
 
 bsd:
+	$(CC) $(COPT) $(CFLAGS) mongoose.c -shared -lpthread \
+		-s -fpic -fPIC -o _$(PROG).so
 	$(CC) $(COPT) $(CFLAGS) $(SRCS) -lpthread -s -o $(PROG)
 
 mac:
@@ -46,7 +50,7 @@ windows: winexe windll
 
 windll:
 	cl $(WINOPT) mongoose.c /link /incremental:no /DLL \
-		/DEF:win32_installer\dll.def /out:$(PROG).dll ws2_32.lib
+		/DEF:win32_installer\dll.def /out:_$(PROG).dll ws2_32.lib
 
 winexe:
 	cl $(WINOPT) $(SRCS) /link /incremental:no \
