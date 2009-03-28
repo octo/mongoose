@@ -41,8 +41,8 @@ server.ports = '8080,8081'   # Listen on port 8081 in addition to 8080
 print 'Starting Mongoose %s on port(s) %s ' % (server.version, server.ports)
 print 'CGI extensions: %s' % server.cgi_ext
 
-# Serve connections for 20 seconds and then exit
-time.sleep(20)
+# Serve connections for 5 minutes and then exit
+time.sleep(5 * 60)
 
 # Deleting server object stops all serving threads
 print 'Stopping server.'
