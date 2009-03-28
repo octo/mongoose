@@ -39,6 +39,7 @@ There are two classes defined:
   automatically stops it. There is no need to call mg_start() or mg_stop().
 """
 
+
 import ctypes
 import os
 
@@ -95,7 +96,8 @@ class Connection(object):
 		var = None
 		pointer = self.m.dll.mg_get_var(self.conn, name)
 		if pointer:
-			var = ctypes.c_char_p(pointer).value
+			# Make a copy and free() the returned pointer
+			var = '%s' % ctypes.c_char_p(pointer).value
 			self.m.dll.mg_free_var(pointer)
 		return var
 
@@ -141,9 +143,8 @@ class Mongoose(object):
 			val = self.dll.mg_version()
 			return ctypes.c_char_p(val).value
 		elif name == 'options':
-			func = self.dll.mg_get_option_list
-			func.restype = ctypes.POINTER(mg_option)
-			return func()
+			val = self.dll.mg_get_option_list()
+			return ctypes.cast(val, ctypes.POINTER(mg_option))
 		else:
 			val = self.dll.mg_get_option(self.ctx, name)
 			return ctypes.c_char_p(val).value
