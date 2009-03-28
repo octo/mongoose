@@ -74,9 +74,9 @@ struct mg_option {
  * mg_set_option	Set an option for the running context.
  * mg_get_option	Get an option for the running context.
  * mg_get_option_list	Get a list of all known options.
- * mg_handle_uri	Associate user function with paticular URI.
+ * mg_bind_to_uri	Associate user function with paticular URI.
  *			'*' in regex matches zero or more characters.
- * mg_handle_error_code	Associate user function with HTTP error code.
+ * mg_bind_to_error_code	Associate user function with HTTP error code.
  *			Passing 0 as error code binds function to all codes.
  *			Error code is passed as status_code in request info.
  * mg_protect_uri	Similar to "protect" option, but uses a user
@@ -115,12 +115,13 @@ void mg_set_ssl_password_callback(struct mg_context *ctx, mg_spcb_t func);
  * mg_printf	Send data, using printf() semantics.
  * mg_get_header Helper function to get HTTP header value
  * mg_get_var	Helper function to get form variable value.
- *		Returned value must be free-d by the caller.
+ *		NOTE: Returned value must be mg_free_var()-ed by the caller.
  */
 int mg_write(struct mg_connection *, const void *buf, int len);
 int mg_printf(struct mg_connection *, const char *fmt, ...);
 const char *mg_get_header(const struct mg_connection *, const char *hdr_name);
 char *mg_get_var(const struct mg_connection *, const char *var_name);
+void mg_free_var(char *var);
 
 /*
  * General helper functions

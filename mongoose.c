@@ -1217,6 +1217,17 @@ get_var(const char *name, const char *buf, size_t buf_len)
 }
 
 /*
+ * Free the pointer returned by mg_get_var(). This is needed for languages
+ * like python, to have an ability to free allocated data without
+ * loading C runtime library and calling free().
+ */
+void
+mg_free_var(char *data)
+{
+	free(data);
+}
+
+/*
  * Return form data variable.
  * It can be specified in query string, or in the POST data.
  * Return NULL if the variable not found, or allocated 0-terminated value.
