@@ -173,6 +173,12 @@ typedef int SOCKET;
 #define	ARRAY_SIZE(array)	(sizeof(array) / sizeof(array[0]))
 #define	UNKNOWN_CONTENT_LENGTH	((uint64_t) ~0ULL)
 
+#if defined(DEBUG)
+#define DEBUG_TRACE(...) fprintf(stderr, "***Mongoose debug*** " __VA_ARGS__)
+#else
+#define DEBUG_TRACE(...)
+#endif /* DEBUG */
+
 /*
  * Darwin prior to 7.0 and Win32 do not have socklen_t
  */
@@ -3525,6 +3531,7 @@ mg_set_option(struct mg_context *ctx, const char *opt, const char *val)
 	const struct mg_option	*option;
 	int			i, ctx_index, retval;
 
+	DEBUG_TRACE("%s: [%s]->[%s]\n", __func__, opt, val);
 	mg_lock(ctx);
 	if (opt != NULL && (option = find_opt(opt)) != NULL) {
 		i = (int) (option - known_options);
