@@ -97,7 +97,7 @@ class Connection(object):
 		pointer = self.m.dll.mg_get_var(self.conn, name)
 		if pointer:
 			# Make a copy and free() the returned pointer
-			var = '%s' % ctypes.c_char_p(pointer).value
+			var = '' + ctypes.c_char_p(pointer).value
 			self.m.dll.mg_free_var(pointer)
 		return var
 
