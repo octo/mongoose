@@ -509,6 +509,16 @@ mg_snprintf(char *buf, size_t buflen, const char *fmt, ...)
 	return (n);
 }
 
+static void
+strip_trailing_directory_separators(char *path)
+{
+	char	*p;
+
+	p = path + strlen(path) - 1;
+	while (p > path && IS_DIRSEP_CHAR(*p))
+		*p-- = '\0';
+}
+
 /*
  * Convert string representing a boolean value to a boolean value
  */
@@ -1269,10 +1279,10 @@ make_path(struct mg_context *ctx, const char *uri, char *buf, size_t buf_len)
 	char	*p, *s;
 	size_t	len;
 
+	mg_lock(ctx);
 	mg_snprintf(buf, buf_len, "%s%s", ctx->options[OPT_ROOT], uri);
 
 	/* If requested URI has aliased prefix, use alternate root */
-	mg_lock(ctx);
        	s = ctx->options[OPT_ALIASES];
 	FOR_EACH_WORD_IN_LIST(s, len) {
 
@@ -1288,10 +1298,7 @@ make_path(struct mg_context *ctx, const char *uri, char *buf, size_t buf_len)
 	}
 	mg_unlock(ctx);
 
-	/* Remove trailing '/' characters, if directory is requested */
-	for (p = buf + strlen(buf) - 1; p > buf && *p == '/'; p--)
-		*p = '\0';
-
+	strip_trailing_directory_separators(buf);
 #ifdef _WIN32
 	for (p = buf; *p != '\0'; p++)
 		if (*p == '/')
@@ -3947,6 +3954,9 @@ mg_start(void)
 	/* Initial document root is set to current working directory */
 	if (ctx->options[OPT_ROOT] == NULL)
 		ctx->options[OPT_ROOT] = getcwd(NULL, 0);
+
+	strip_trailing_directory_separators(ctx->options[OPT_ROOT]);
+	DEBUG_TRACE("%s: root [%s]", __func__, ctx->options[OPT_ROOT]);
 
 #if 0
 	tm->tm_gmtoff - 3600 * (tm->tm_isdst > 0 ? 1 : 0);
