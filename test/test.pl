@@ -139,6 +139,14 @@ if ($^O =~ /darwin|bsd|linux/) {
 	}
 }
 
+if (scalar(@ARGV) > 0 and $ARGV[0] eq 'embedded') {
+	do_embedded_test();
+	exit 0;
+} elsif (scalar(@ARGV) > 0 and $ARGV[0] eq 'unit') {
+	do_unit_test();
+	exit 0;
+}
+
 # Make sure we load config file if no options are given
 write_file($config, "ports 12345\naccess_log access.log\n");
 spawn($exe);
@@ -148,14 +156,6 @@ o("GET /test/hello.txt HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'Loading config file');
 $port = $saved_port;
 unlink $config;
 kill_spawned_child();
-
-if (scalar(@ARGV) > 0 and $ARGV[0] eq 'embedded') {
-	do_embedded_test();
-	exit 0;
-} elsif (scalar(@ARGV) > 0 and $ARGV[0] eq 'unit') {
-	do_unit_test();
-	exit 0;
-}
 
 do_unit_test();
 
@@ -229,7 +229,7 @@ foreach my $key (keys %$mime_types) {
 
 # Get binary file and check the integrity
 my $binary_file = 'binary_file';
-my $f2 = ''; 
+my $f2 = '';
 foreach (0..123456) { $f2 .= chr(int(rand() * 255)); }
 write_file("$root/$binary_file", $f2);
 my $f1 = req("GET /$binary_file HTTP/1.0\r\n\n");
@@ -406,7 +406,7 @@ sub do_embedded_test {
 	o("GET /test_get_var?my_var=one%2btwo&b=two%2b HTTP/1.0\n\n",
 			'Value: \[one\+two\]', 'mg_get_var 8', 0);
 
-	# + in form data MUST be decoded to space	
+	# + in form data MUST be decoded to space
 	o("POST /test_get_var HTTP/1.0\nContent-Length: 10\n\n".
 		"my_var=b+c", 'Value: \[b c\]', 'mg_get_var 7', 0);
 
@@ -414,8 +414,8 @@ sub do_embedded_test {
 	my $my_var = 'x' x 64000;
 	o("POST /test_get_var HTTP/1.0\nContent-Length: 64007\n\n".
 		"my_var=$my_var", 'Value size: \[64000\]', 'mg_get_var 8', 0);
-	
-		
+
+
 	o("POST /test_get_request_info?xx=yy HTTP/1.0\nFoo: bar\n".
 		"Content-Length: 3\n\na=b",
 		'Method: \[POST\].URI: \[/test_get_request_info\].'.
@@ -428,24 +428,24 @@ sub do_embedded_test {
 	o("GET /not_exist HTTP/1.0\n\n", 'Error: \[404\]', '404 handler', 0);
 	o("bad request\n\n", 'Error: \[400\]', '* error handler', 0);
 	o("GET /test_user_data HTTP/1.0\n\n",
-		'User data: \[1234\]', 'user data in callback', 0);		
+		'User data: \[1234\]', 'user data in callback', 0);
 	o("GET /foo/secret HTTP/1.0\n\n",
 		'401 Unauthorized', 'mg_protect_uri', 0);
 	o("GET /foo/secret HTTP/1.0\nAuthorization: Digest username=bill\n\n",
 		'401 Unauthorized', 'mg_protect_uri (bill)', 0);
 	o("GET /foo/secret HTTP/1.0\nAuthorization: Digest username=joe\n\n",
 		'200 OK', 'mg_protect_uri (joe)', 0);
-	
+
 	kill_spawned_child();
 }
 
 sub do_unit_test {
-	my $cmd = "cc -o $unit_test_exe $root/unit_test.c ".
-		"-I. -DNO_SSL -lpthread ";
+	my $cmd = "cc -o $unit_test_exe -DMONGOOSE_TEST $root/unit_test.c ".
+		"-DDEBUG -I. -DNO_SSL -lpthread ";
 	if (on_windows()) {
 		$unit_test_exe .= '.exe';
-		$cmd = "cl $root/unit_test.c /I. /nologo ".
-			"/link /out:$unit_test_exe ws2_32.lib ";
+		$cmd = "cl $root/unit_test.c /I. /nologo /DMONGOOSE_TEST ".
+			"/DDEBUG /link /out:$unit_test_exe ws2_32.lib ";
 	}
 	print $cmd, "\n";
 	system($cmd) == 0 or fail("Cannot compile unit test");
