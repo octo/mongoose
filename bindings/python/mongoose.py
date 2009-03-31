@@ -115,13 +115,14 @@ class Mongoose(object):
 
 	# Exceptions for __setattr__ and __getattr__: these attributes
 	# must not be treated as Mongoose options
-	_private = ('dll', 'ctx', 'callbacks')
+	_private = ('dll', 'ctx', 'version', 'callbacks')
 
 	def __init__(self, **kwargs):
 		dll_extension = os.name == 'nt' and 'dll' or 'so'
 		self.dll = ctypes.CDLL('_mongoose.%s' % dll_extension)
 		start = self.dll.mg_start
 		self.ctx = ctypes.c_voidp(self.dll.mg_start()).value
+		self.version = ctypes.c_char_p(self.dll.mg_version()).value
 		self.callbacks = []
 		for name, value in kwargs.iteritems():
 			self.__setattr__(name, value)
@@ -140,12 +141,6 @@ class Mongoose(object):
 		"""Get Mongoose option."""
 		if name in self._private:
 			return object.__getattr__(self, name)
-		elif name == 'version':
-			val = self.dll.mg_version()
-			return ctypes.c_char_p(val).value
-		elif name == 'options':
-			val = self.dll.mg_get_option_list()
-			return ctypes.cast(val, ctypes.POINTER(mg_option))
 		else:
 			val = self.dll.mg_get_option(self.ctx, name)
 			return ctypes.c_char_p(val).value
@@ -173,6 +168,11 @@ class Mongoose(object):
 		self.callbacks.append(cb)
 
 		self.dll[func_name](self.ctx, what, cb, data)
+
+	def get_option_list(self):
+		"""Return list of all known options."""
+		val = self.dll.mg_get_option_list()
+		return ctypes.cast(val, ctypes.POINTER(mg_option))
 
 	def bind_to_uri(self, uri_regex, callback, data):
 		self._bind(uri_regex, callback, data, 'mg_bind_to_uri')
