@@ -115,13 +115,14 @@ class Mongoose(object):
 
 	# Exceptions for __setattr__ and __getattr__: these attributes
 	# must not be treated as Mongoose options
-	_private = ('dll', 'ctx')
+	_private = ('dll', 'ctx', 'callbacks')
 
 	def __init__(self, **kwargs):
 		dll_extension = os.name == 'nt' and 'dll' or 'so'
 		self.dll = ctypes.CDLL('_mongoose.%s' % dll_extension)
 		start = self.dll.mg_start
 		self.ctx = ctypes.c_voidp(self.dll.mg_start()).value
+		self.callbacks = []
 		for name, value in kwargs.iteritems():
 			self.__setattr__(name, value)
 
@@ -165,6 +166,11 @@ class Mongoose(object):
 
 		cb = ctypes.CFUNCTYPE(ctypes.c_voidp, ctypes.c_voidp,
 			ctypes.POINTER(mg_request_info), ctypes.c_voidp)(_cb)
+
+		# Store created callback in the list, so it is kept alive
+		# during context lifetime. Otherwise, python can garbage
+		# collect it, and C code will crash trying to call it.
+		self.callbacks.append(cb)
 
 		self.dll[func_name](self.ctx, what, cb, data)
 
