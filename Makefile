@@ -1,6 +1,6 @@
 PROG=	mongoose
 SRCS=	main.c mongoose.c
-COPT=	-W -Wall -std=c99 -pedantic -Os
+COPT=	-W -Wall -std=c99 -pedantic -DNDEBUG -Os
 
 # Possible flags: (in brackets are rough numbers for 'gcc -O2' on i386)
 # -DHAVE_MD5		- use system md5 library (-2kb)
