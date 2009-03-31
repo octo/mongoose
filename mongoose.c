@@ -2387,6 +2387,8 @@ mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
 		cb->status_code = status_code;
 		cb->user_data = user_data;
 		ctx->num_callbacks++;
+		DEBUG_TRACE("%s: uri %s func %p code %d\n", __func__,
+		    uri_regex ? uri_regex : "NULL", func, status_code);
 	}
 }
 
@@ -3956,7 +3958,7 @@ mg_start(void)
 		ctx->options[OPT_ROOT] = getcwd(NULL, 0);
 
 	strip_trailing_directory_separators(ctx->options[OPT_ROOT]);
-	DEBUG_TRACE("%s: root [%s]", __func__, ctx->options[OPT_ROOT]);
+	DEBUG_TRACE("%s: root [%s]\n", __func__, ctx->options[OPT_ROOT]);
 
 #if 0
 	tm->tm_gmtoff - 3600 * (tm->tm_isdst > 0 ? 1 : 0);
