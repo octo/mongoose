@@ -13,5 +13,6 @@ EXPORTS
 	mg_printf
 	mg_get_header
 	mg_get_var
+	mg_free_var
 	mg_version
 	mg_md5 
