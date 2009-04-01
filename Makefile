@@ -11,9 +11,15 @@ COPT=	-W -Wall -std=c99 -pedantic -DNDEBUG -Os
 # -DNO_AUTH		- disable authorization support (-4kb)
 # -DCONFIG=\"file\"	- use `file' as the default config file
 # -DNO_SSI		- disable SSI support (-4kb)
+# -DHAVE_STRTOUI64	- use system strtoui64() function for strtoull()
 
 all:
 	@echo "make (linux|bsd|mac|windows|mingw|rtems)"
+
+
+##########################################################################
+###                 UNIX build: linux, bsd, mac, rtems
+##########################################################################
 
 linux:
 	$(CC) $(COPT) $(CFLAGS) -D_POSIX_SOURCE -D_BSD_SOURCE \
@@ -35,24 +41,25 @@ rtems:
 	$(CC) -c $(COPT) $(CFLAGS) mongoose.c compat_rtems.c
 	$(AR) -r lib$(PROG).a *.o && ranlib lib$(PROG).a
 
-# To build on Windows, follow these steps:
+
+##########################################################################
+###            WINDOWS build: Using Visual Studio or Mingw
+##########################################################################
+
+# Using Visual Studio Express
 # 1. Download and install Visual Studio Express 2008 to c:\msvc8
 # 2. Download and install Windows SDK to c:\sdk
 # 3. Go to c:\msvc8\vc\bin and start "VIsual Studio 2008 Command prompt"
 #    (or Itanium/amd64 command promt to build x64 version)
 # 4. In the command prompt, go to mongoose directory and do "nmake windows"
 
-#WINDBG=	/Zi /DDEBUG /Od
-WINDBG=	/DNDEBUG /Os /Oi /GL /Gy
+WINDBG=	/Zi /DDEBUG /Od
+#WINDBG=	/DNDEBUG /Os /Oi /GL /Gy
 WINOPT=	/MT /TC $(WINDBG) /nologo /W4 \
 	/D_CRT_SECURE_NO_WARNINGS /DHAVE_STRTOUI64
-windows: winexe windll
-
-windll:
+windows:
 	cl $(WINOPT) mongoose.c /link /incremental:no /DLL \
 		/DEF:win32_installer\dll.def /out:_$(PROG).dll ws2_32.lib
-
-winexe:
 	cl $(WINOPT) $(SRCS) /link /incremental:no \
 		/out:$(PROG).exe ws2_32.lib advapi32.lib
 
@@ -60,21 +67,24 @@ winexe:
 #MINGWDBG= -DDEBUG -O0
 MINGWDBG= -DNDEBUG -Os
 MINGWOPT= -W -Wall -mthreads -Wl,--subsystem,console $(MINGWDBG) -DHAVE_STDINT
-
-mingw: mingwexe mingwdll
-mingwdll:
+mingw:
 	gcc $(MINGWOPT) mongoose.c -lws2_32 \
 		-shared -Wl,--out-implib=$(PROG).lib -o $(PROG).dll
-
-mingwexe:
 	gcc $(MINGWOPT) $(SRCS) -lws2_32 -ladvapi32 -o $(PROG).exe
+
+
+##########################################################################
+###            Manuals, cleanup, test, release
+##########################################################################
 
 man:
 	cat mongoose.1 | tbl | groff -man -Tascii | col -b > mongoose.1.txt
 	cat mongoose.1 | tbl | groff -man -Tascii | less
 
-test: test-server
-test-server:
+# "TEST=unit make test" - perform unit test only
+# "TEST=embedded" - test embedded API by building and testing test/embed.c
+# "TEST=basic_tests" - perform basic tests only (no CGI, SSI..)
+test:
 	perl test/test.pl $(TEST)
 
 release: clean
