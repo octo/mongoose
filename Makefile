@@ -1,8 +1,12 @@
-PROG=	mongoose
-SRCS=	main.c mongoose.c
-COPT=	-W -Wall -std=c99 -pedantic -DNDEBUG -Os
+# This file is part of Mongoose project, http://code.google.com/p/mongoose
+# $Id$
 
-# Possible flags: (in brackets are rough numbers for 'gcc -O2' on i386)
+PROG=	mongoose
+
+all:
+	@echo "make (linux|bsd|mac|windows|mingw)"
+
+# Possible COPT values: (in brackets are rough numbers for 'gcc -O2' on i386)
 # -DHAVE_MD5		- use system md5 library (-2kb)
 # -DNDEBUG		- strip off all debug code (-5kb)
 # -D_DEBUG		- build debug version (very noisy) (+7kb)
@@ -13,33 +17,26 @@ COPT=	-W -Wall -std=c99 -pedantic -DNDEBUG -Os
 # -DNO_SSI		- disable SSI support (-4kb)
 # -DHAVE_STRTOUI64	- use system strtoui64() function for strtoull()
 
-all:
-	@echo "make (linux|bsd|mac|windows|mingw|rtems)"
-
 
 ##########################################################################
 ###                 UNIX build: linux, bsd, mac, rtems
 ##########################################################################
 
-linux:
-	$(CC) $(COPT) $(CFLAGS) -D_POSIX_SOURCE -D_BSD_SOURCE \
-		mongoose.c -shared -fPIC -fpic -ldl -lpthread -s -o _$(PROG$).so
-	$(CC) $(COPT) $(CFLAGS)  -D_POSIX_SOURCE -D_BSD_SOURCE \
-		$(SRCS) -ldl -lpthread -s -o $(PROG)
+CFLAGS=		-W -Wall -std=c99 -pedantic -DNDEBUG -Os $(COPT)
+MAC_SHARED=	-flat_namespace -bundle -undefined suppress
+LINFLAGS=	$(CFLAGS) -D_POSIX_SOURCE -D_BSD_SOURCE -ldl -lpthread
+LIB=		_$(PROG).so
 
+linux:
+	$(CC) $(LINFLAGS) mongoose.c -shared -fPIC -fpic -s -o $(LIB)
+	$(CC) $(LINFLAGS) mongoose.c main.c -s -o $(PROG)
 bsd:
-	$(CC) $(COPT) $(CFLAGS) mongoose.c -shared -lpthread \
-		-s -fpic -fPIC -o _$(PROG).so
-	$(CC) $(COPT) $(CFLAGS) $(SRCS) -lpthread -s -o $(PROG)
+	$(CC) $(CFLAGS) mongoose.c -shared -lpthread -s -fpic -fPIC -o $(LIB)
+	$(CC) $(CFLAGS) mongoose.c main.c -lpthread -s -o $(PROG)
 
 mac:
-	$(CC) $(COPT) $(CFLAGS) -flat_namespace -bundle -undefined suppress \
-		-o _$(PROG).so mongoose.c
-	$(CC) $(COPT) $(CFLAGS) $(SRCS) -lpthread -o $(PROG)
-
-rtems:
-	$(CC) -c $(COPT) $(CFLAGS) mongoose.c compat_rtems.c
-	$(AR) -r lib$(PROG).a *.o && ranlib lib$(PROG).a
+	$(CC) $(CFLAGS) $(MAC_SHARED) mongoose.c -lpthread -o $(LIB)
+	$(CC) $(CFLAGS) mongoose.c main.c -lpthread -o $(PROG)
 
 
 ##########################################################################
@@ -60,7 +57,7 @@ WINOPT=	/MT /TC $(WINDBG) /nologo /W4 \
 windows:
 	cl $(WINOPT) mongoose.c /link /incremental:no /DLL \
 		/DEF:win32_installer\dll.def /out:_$(PROG).dll ws2_32.lib
-	cl $(WINOPT) $(SRCS) /link /incremental:no \
+	cl $(WINOPT) mongoose.c main.c /link /incremental:no \
 		/out:$(PROG).exe ws2_32.lib advapi32.lib
 
 # Build for Windows under MinGW
@@ -69,8 +66,8 @@ MINGWDBG= -DNDEBUG -Os
 MINGWOPT= -W -Wall -mthreads -Wl,--subsystem,console $(MINGWDBG) -DHAVE_STDINT
 mingw:
 	gcc $(MINGWOPT) mongoose.c -lws2_32 \
-		-shared -Wl,--out-implib=$(PROG).lib -o $(PROG).dll
-	gcc $(MINGWOPT) $(SRCS) -lws2_32 -ladvapi32 -o $(PROG).exe
+		-shared -Wl,--out-implib=$(PROG).lib -o _$(PROG).dll
+	gcc $(MINGWOPT) mongoose.c main.c -lws2_32 -ladvapi32 -o $(PROG).exe
 
 
 ##########################################################################
@@ -84,7 +81,8 @@ man:
 # "TEST=unit make test" - perform unit test only
 # "TEST=embedded" - test embedded API by building and testing test/embed.c
 # "TEST=basic_tests" - perform basic tests only (no CGI, SSI..)
-test:
+test: do_test
+do_test:
 	perl test/test.pl $(TEST)
 
 release: clean
