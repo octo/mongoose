@@ -2750,7 +2750,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	} while (n > 0);
 
 done:
-	if (pid > 0)
+	if (pid != (pid_t) -1)
 		kill(pid, SIGTERM);
 	if (fd_stdin[0] != -1)
 		(void) close(fd_stdin[0]);
