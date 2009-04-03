@@ -22,7 +22,7 @@ all:
 ###                 UNIX build: linux, bsd, mac, rtems
 ##########################################################################
 
-CFLAGS=		-W -Wall -std=c99 -pedantic -DNDEBUG -Os $(COPT)
+CFLAGS=		-W -Wall -std=c99 -pedantic -Os $(COPT)
 MAC_SHARED=	-flat_namespace -bundle -undefined suppress
 LINFLAGS=	$(CFLAGS) -D_POSIX_SOURCE -D_BSD_SOURCE -ldl -lpthread
 LIB=		_$(PROG).so
