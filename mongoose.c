@@ -288,7 +288,6 @@ enum mg_option_index {
 	OPT_AUTH_GPASSWD, OPT_AUTH_PUT, OPT_ACCESS_LOG, OPT_ERROR_LOG,
 	OPT_SSL_CERTIFICATE, OPT_ALIASES, OPT_ACL, OPT_UID,
 	OPT_PROTECT, OPT_SERVICE, OPT_HIDE, OPT_ADMIN_URI, OPT_MAX_THREADS,
-	OPT_IDLE_TIME,
 	NUM_OPTIONS
 };
 
@@ -334,10 +333,7 @@ struct mg_context {
 	pthread_mutex_t	opt_mutex;	/* Option setter/getter guard	*/
 
 	int		max_threads;	/* Maximum number of threads	*/
-	int		num_active;	/* Number of active threads	*/
-	int		num_idle;	/* Number of idle threads	*/
-
-	int		ctl[2];		/* Control pipe			*/
+	int		num_threads;	/* Number of active threads	*/
 
 	mg_spcb_t	ssl_password_callback;
 };
@@ -960,6 +956,14 @@ mg_mkdir(const char *path, int mode)
 	return (_wmkdir(wbuf));
 }
 
+static int
+set_non_blocking_mode(SOCKET sock)
+{
+        unsigned long   on = 1;
+
+        return (ioctlsocket(sock, FIONBIO, &on));
+}
+
 #else
 
 static int
@@ -1057,6 +1061,22 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	return (pid);
 }
 #endif /* !NO_CGI */
+
+static int
+set_non_blocking_mode(SOCKET sock)
+{
+        int     flags, ok = -1;
+
+        if ((flags = fcntl(sock, F_GETFL, 0)) == -1) {
+                cry(NULL, "%s: fcntl(F_GETFL): %d", __func__, ERRNO);
+        } else if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) != 0) {
+                cry(NULL, "%s: fcntl(F_SETFL): %d", __func__, ERRNO);
+        } else {
+                ok = 0;        /* Success */
+        }
+
+        return (ok);
+}
 #endif /* _WIN32 */
 
 static void
@@ -1328,6 +1348,7 @@ mg_open_listening_port(int port)
 	    listen(sock, 128) == 0) {
 		/* Success */
 		set_close_on_exec(sock);
+		set_non_blocking_mode(sock);
 	} else {
 		/* Error */
 		cry(NULL, "%s(%d): %s", __func__, port, strerror(errno));
@@ -2387,8 +2408,8 @@ mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
 		cb->status_code = status_code;
 		cb->user_data = user_data;
 		ctx->num_callbacks++;
-		DEBUG_TRACE("%s: uri %s func %p code %d\n", __func__,
-		    uri_regex ? uri_regex : "NULL", func, status_code);
+		DEBUG_TRACE("%s: uri %s code %d\n",
+		    __func__, uri_regex ? uri_regex : "NULL", status_code);
 	}
 }
 
@@ -3210,11 +3231,8 @@ mg_fini(struct mg_context *ctx)
 	close_all_listening_sockets(ctx);
 
 	/* Wait until all threads finish */
-	while (ctx->num_active + ctx->num_idle > 0)
-		sleep(0);
-
-	assert(ctx->num_active == 0);
-	assert(ctx->num_idle == 0);
+	while (ctx->num_threads > 0)
+		sleep(1);
 
 	/* Deallocate all registered callbacks */
 	for (i = 0; i < ctx->num_callbacks; i++)
@@ -3235,10 +3253,6 @@ mg_fini(struct mg_context *ctx)
 	/* Deallocate SSL context */
 	if (ctx->ssl_ctx)
 		SSL_CTX_free(ctx->ssl_ctx);
-
-	/* Close control pipe */
-	(void) close(ctx->ctl[0]);
-	(void) close(ctx->ctl[1]);
 
 	(void) pthread_mutex_destroy(&ctx->opt_mutex);
 
@@ -3482,7 +3496,6 @@ static const struct mg_option known_options[] = {
 	{"admin_uri", "Administration page URI", NULL},
 	{"acl", "\tAllow/deny IP addresses/subnets", NULL},
 	{"max_threads", "Maximum simultaneous threads to spawn", "100"},
-	{"idle_time", "Seconds to wait before idle thread exits", "10"},
 	{NULL, NULL, NULL}
 };
 
@@ -3518,7 +3531,6 @@ static const struct option_setter {
 	{OPT_ADMIN_URI,		&set_admin_uri_option},
 	{OPT_ACL,		&set_acl_option},
 	{OPT_MAX_THREADS,	&set_max_threads_option},
-	{OPT_IDLE_TIME,		NULL},
 	{-1,			NULL}
 };
 
@@ -3663,6 +3675,31 @@ shift_to_next(struct mg_connection *conn, char *buf, int req_len, int *nread)
 	(void) memmove(buf, buf + req_len + body_len, *nread);
 }
 
+/*
+ * This function is used to prevent mg_stop() to block forever.
+ * When browser makes a Keep-Alive connection, read_request() would block
+ * forever until some data is read. If the server is stopped, mg_stop()
+ * would wait for those threads. To prevent that, call should_exit() before
+ * calling read_request(): it checks the ctx->stop_flag while waiting for data.
+ */
+static int
+should_exit(const struct mg_connection *conn)
+{
+	fd_set		read_set;
+	struct timeval	tv;
+	int		n;
+
+	do {
+		tv.tv_sec	= 1;
+		tv.tv_usec	= 0;
+		FD_ZERO(&read_set);
+		FD_SET(conn->client.sock, &read_set);
+		n = select(conn->client.sock + 1, &read_set, NULL, NULL, &tv);
+	} while (conn->ctx->stop_flag == 0 && n == 0);
+
+	return (conn->ctx->stop_flag);
+}
+
 static void
 process_new_connection(struct mg_connection *conn)
 {
@@ -3673,9 +3710,13 @@ process_new_connection(struct mg_connection *conn)
 	nread = 0;
 	do {
 		/* If next request is not pipelined, read it in */
-		if ((request_len = get_request_len(buf, (size_t) nread)) == 0)
+		if ((request_len = get_request_len(buf, (size_t) nread)) == 0) {
+			/* Do not block forever in reading client */
+			if (should_exit(conn))
+				break;
 			request_len = read_request(-1, conn->client.sock,
 			    conn->ssl, buf, sizeof(buf), &nread);
+		}
 		assert(nread >= request_len);
 
 		if (request_len == 0)
@@ -3715,146 +3756,82 @@ process_new_connection(struct mg_connection *conn)
 	} while (conn->keep_alive);
 }
 
-/*
- * Worker thread function. It blocks on reading from the control pipe. Every
- * second master thread sends fake invalid sockets to all idle threads, so
- * they can unblock, check for idle timeout and exit if necessary.
- * This function increments and decrements global counters - for idle and
- * active threads. Atomic functions were not used, since:
- *    a) there is no portable interface for atomic increment and decrement
- *    b) the increments and decrements are blind with no return values, and I
- *       believe in this case atomic ops are not needed.
- */
 static void
-worker_loop(struct mg_context *ctx)
+worker_thread(struct mg_connection *conn)
 {
-	struct mg_connection	conn;
-	time_t			expire;
+	DEBUG_TRACE("%s: thread %p starting\n", __func__, (void *) conn);
 
-	expire = time(NULL) + atoi(ctx->options[OPT_IDLE_TIME]) + 1;
-
-	while (time(NULL) < expire && ctx->stop_flag == 0) {
-		(void) memset(&conn, 0, sizeof(conn));
-
-		/*
-		 * Theoretically, read() may return less than requested.
-		 * It should not happen, but if it will, it is a problem.
-		 * Then we should revert to using UDP sockets, which
-		 * are datagram channels, so other thread never reads
-		 * some part of the data in the control pipe.
-		 */
-		if (read(ctx->ctl[0], (void *) &conn.client,
-		    sizeof(conn.client)) != sizeof(conn.client)) {
-			cry(NULL, "%s: Error reading from control pipe: %d",
-			    __func__, ERRNO);
-			expire = 0;
-		} else if (conn.client.sock == INVALID_SOCKET) {
-			/*
-			 * This is a wakeup from the master thread, or from
-			 * the mg_stop() function.
-			 */
-			continue;
-		} else {
-			ctx->num_active++;
-			ctx->num_idle--;
-			assert(ctx->num_idle >= 0);
-
-			/* Initialize the rest of attributes */
-			conn.ctx = ctx;
-			conn.birth_time = time(NULL);
-
-			if (conn.client.is_ssl &&
-			    (conn.ssl = SSL_new(ctx->ssl_ctx)) == NULL) {
-				cry(&conn, "%s: SSL_new: %d", __func__, ERRNO);
-			} else if (conn.client.is_ssl &&
-			    SSL_set_fd(conn.ssl, conn.client.sock) != 1) {
-				cry(&conn, "%s: SSL_set_fd: %d",
-				    __func__, ERRNO);
-			} else if (conn.client.is_ssl &&
-			    SSL_accept(conn.ssl) != 1) {
-				cry(&conn, "%s: SSL handshake error", __func__);
-			} else {
-				process_new_connection(&conn);
-			}
-
-			close_connection(&conn);
-
-			ctx->num_idle++;
-			ctx->num_active--;
-			assert(ctx->num_active >= 0);
-
-			/* Advance expiration time in the future */
-			expire = time(NULL) +
-			    atoi(ctx->options[OPT_IDLE_TIME]) + 1;
-		}
+	if (conn->client.is_ssl &&
+	    (conn->ssl = SSL_new(conn->ctx->ssl_ctx)) == NULL) {
+		cry(conn, "%s: SSL_new: %d", __func__, ERRNO);
+	} else if (conn->client.is_ssl &&
+	    SSL_set_fd(conn->ssl, conn->client.sock) != 1) {
+		cry(conn, "%s: SSL_set_fd: %d", __func__, ERRNO);
+	} else if (conn->client.is_ssl && SSL_accept(conn->ssl) != 1) {
+		cry(conn, "%s: SSL handshake error", __func__);
+	} else {
+		process_new_connection(conn);
 	}
 
-	ctx->num_idle--;
+	close_connection(conn);
+	free(conn);
+
+	conn->ctx->num_threads--;
+	assert(conn->ctx->num_threads >= 0);
+	DEBUG_TRACE("%s: thread %p exiting\n", __func__, (void *) conn);
 }
 
 static void
 accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 {
-	struct socket	accepted;
+	struct socket		accepted;
+	struct mg_connection	*conn;
 
-	accepted.usa.len = sizeof(accepted.usa.u.sin);
+	/* Keep accepting connections until there are no new left */
+	for (;;) {
+		accepted.usa.len = sizeof(accepted.usa.u.sin);
+		if ((accepted.sock = accept(listener->sock,
+	    	    &accepted.usa.u.sa, &accepted.usa.len)) == INVALID_SOCKET)
+			break;
 
-	if ((accepted.sock = accept(listener->sock,
-	    &accepted.usa.u.sa, &accepted.usa.len)) == INVALID_SOCKET) {
-		cry(NULL, "%s: accept: %d", __func__, ERRNO);
-	} else if (ctx->options[OPT_ACL] != NULL &&
-	    !check_acl(ctx->options[OPT_ACL], &accepted.usa)) {
-		cry(NULL, "%s: %s is not allowed to connect",
-		    __func__, inet_ntoa(accepted.usa.u.sin.sin_addr));
-		(void) closesocket(accepted.sock);
-	} else {
-		/*
-		 * If we need to start a new thread and it is maximum allowed
-		 * already running, wait until some become idle.
-		 */
-		while (ctx->num_active >= ctx->max_threads)
-			sleep(0);
+		if (ctx->options[OPT_ACL] != NULL &&
+		    !check_acl(ctx->options[OPT_ACL], &accepted.usa)) {
+			cry(NULL, "%s: %s is not allowed to connect",
+			    __func__, inet_ntoa(accepted.usa.u.sin.sin_addr));
+			(void) closesocket(accepted.sock);
+		} else if ((conn = calloc(1, sizeof(*conn))) == NULL) {
+			cry(NULL, "%s: cannot allocate new socket", __func__);
+			(void) closesocket(accepted.sock);
+		} else {
+			accepted.is_ssl = listener->is_ssl;
+			conn->client = accepted;
+			conn->ctx = ctx;
+			conn->birth_time = time(NULL);
 
-		/* Start a new thread if needed */
-		if (ctx->num_idle == 0) {
 			/*
-			 * Sequence is important here: first num_idle must
+			 * If we need to start a new thread and it is maximum
+			 * allowed already running, wait until some become idle.
+			 */
+			while (ctx->num_threads >= ctx->max_threads)
+				sleep(0);
+
+			/*
+			 * Sequence is important here: first num_threads must
 			 * be incremented, and then new thread started.
-			 * Otherwise, worker thread may do num_idle--
-			 * before master does num_idle++, breaking the assert.
-			 * Thanks to blavier@adeneo.eu for helping to
-			 * debug this.
+			 * Otherwise, worker thread may do num_threads--
+			 * before master does num_threads++, breaking the
+			 * assertion. Thanks to blavier@adeneo.eu for helping
+			 * to debug this.
 			 * TODO: add error check for start_thread().
 			 */
-			ctx->num_idle++;
-			start_thread((mg_thread_func_t) worker_loop, ctx);
-		}
-
-		/* Send accepted socket to some of the worker threads */
-		accepted.is_ssl = listener->is_ssl;
-		if (write(ctx->ctl[1], (void *) &accepted,
-		    sizeof(accepted)) != sizeof(accepted)) {
-			cry(NULL, "%s control socket error: %s",
-			    __func__, strerror(errno));
-			(void) closesocket(accepted.sock);
+			ctx->num_threads++;
+			start_thread((mg_thread_func_t) worker_thread, conn);
 		}
 	}
 }
 
 static void
-wakeup_worker_threads(const struct mg_context *ctx, int num_wakeups)
-{
-	struct socket	fake;
-	int		i;
-
-	/* Send INVALID_SOCKET to threads */
-	fake.sock = INVALID_SOCKET;
-	for (i = 0; i < num_wakeups; i++)
-		(void) write(ctx->ctl[1], (void *) &fake, sizeof(fake));
-}
-
-static void
-listening_loop(struct mg_context *ctx)
+master_thread(struct mg_context *ctx)
 {
 	fd_set		read_set;
 	struct timeval	tv;
@@ -3891,9 +3868,6 @@ listening_loop(struct mg_context *ctx)
 					    ctx->listeners + i, ctx);
 			mg_unlock(ctx);
 		}
-
-		/* Send wakeups to idle threads only */
-		wakeup_worker_threads(ctx, ctx->num_idle);
 	}
 
 	/* Stop signal received: somebody called mg_stop. Quit. */
@@ -3905,15 +3879,11 @@ mg_stop(struct mg_context *ctx)
 {
 	ctx->stop_flag = 1;
 
-	wakeup_worker_threads(ctx, ctx->num_active + ctx->num_idle);
-
 	/* Wait until mg_fini() stops */
 	while (ctx->stop_flag != 2)
-		sleep(0);
+		sleep(1);
 
-	assert(ctx->num_active == 0);
-	assert(ctx->num_idle == 0);
-
+	assert(ctx->num_threads == 0);
 	free(ctx);
 }
 
@@ -3930,10 +3900,6 @@ mg_start(void)
 
 	if ((ctx = (struct mg_context *) calloc(1, sizeof(*ctx))) == NULL) {
 		cry(NULL, "cannot allocate mongoose context");
-		return (NULL);
-	} else if (pipe(ctx->ctl) != 0) {
-		cry(NULL, "Cannot create control pipe: %d", ERRNO);
-		free(ctx);
 		return (NULL);
 	}
 
@@ -3974,7 +3940,7 @@ mg_start(void)
 
 	/* Start master (listening) thread */
 	(void) pthread_mutex_init(&ctx->opt_mutex, NULL);
-	start_thread((mg_thread_func_t) listening_loop, ctx);
+	start_thread((mg_thread_func_t) master_thread, ctx);
 
 	return (ctx);
 }
