@@ -286,8 +286,8 @@ enum mg_option_index {
 	OPT_ROOT, OPT_INDEX_FILES, OPT_PORTS, OPT_DIR_LIST, OPT_CGI_EXTENSIONS,
 	OPT_CGI_INTERPRETER, OPT_CGI_ENV, OPT_SSI_EXTENSIONS, OPT_AUTH_DOMAIN,
 	OPT_AUTH_GPASSWD, OPT_AUTH_PUT, OPT_ACCESS_LOG, OPT_ERROR_LOG,
-	OPT_SSL_CERTIFICATE, OPT_ALIASES, OPT_ACL, OPT_UID,
-	OPT_PROTECT, OPT_SERVICE, OPT_HIDE, OPT_ADMIN_URI, OPT_MAX_THREADS,
+	OPT_SSL_CERTIFICATE, OPT_ALIASES, OPT_ACL, OPT_UID, OPT_PROTECT,
+	OPT_SERVICE, OPT_HIDE, OPT_ADMIN_URI, OPT_MAX_THREADS, OPT_IDLE_TIME,
 	NUM_OPTIONS
 };
 
@@ -3496,6 +3496,7 @@ static const struct mg_option known_options[] = {
 	{"admin_uri", "Administration page URI", NULL},
 	{"acl", "\tAllow/deny IP addresses/subnets", NULL},
 	{"max_threads", "Maximum simultaneous threads to spawn", "100"},
+	{"idle_time", "Time in seconds connection stays idle", "10"},
 	{NULL, NULL, NULL}
 };
 
@@ -3531,6 +3532,7 @@ static const struct option_setter {
 	{OPT_ADMIN_URI,		&set_admin_uri_option},
 	{OPT_ACL,		&set_acl_option},
 	{OPT_MAX_THREADS,	&set_max_threads_option},
+	{OPT_IDLE_TIME,		NULL},
 	{-1,			NULL}
 };
 
@@ -3615,6 +3617,7 @@ close_socket_gracefully(SOCKET sock)
 
 	/* Send FIN to the client */
 	(void) shutdown(sock, SHUT_WR);
+	set_non_blocking_mode(sock);
 
 	/*
 	 * Read and discard pending data. If we do not do that and close the
@@ -3687,17 +3690,19 @@ should_exit(const struct mg_connection *conn)
 {
 	fd_set		read_set;
 	struct timeval	tv;
-	int		n;
+	int		n, seconds_to_wait;
 
+	seconds_to_wait = atoi(conn->ctx->options[OPT_IDLE_TIME]) + 1;
 	do {
 		tv.tv_sec	= 1;
 		tv.tv_usec	= 0;
 		FD_ZERO(&read_set);
 		FD_SET(conn->client.sock, &read_set);
 		n = select(conn->client.sock + 1, &read_set, NULL, NULL, &tv);
-	} while (conn->ctx->stop_flag == 0 && n == 0);
+		seconds_to_wait--;
+	} while (conn->ctx->stop_flag == 0 && n == 0 && seconds_to_wait > 0);
 
-	return (conn->ctx->stop_flag);
+	return (conn->ctx->stop_flag || n != 1);
 }
 
 static void
@@ -3709,6 +3714,12 @@ process_new_connection(struct mg_connection *conn)
 
 	nread = 0;
 	do {
+		/*
+		 * This sets conn->keep_alive to FALSE, so by default
+		 * we break the loop.
+		 */
+		reset_connection_attributes(conn);
+
 		/* If next request is not pipelined, read it in */
 		if ((request_len = get_request_len(buf, (size_t) nread)) == 0) {
 			/* Do not block forever in reading client */
@@ -3721,12 +3732,6 @@ process_new_connection(struct mg_connection *conn)
 
 		if (request_len == 0)
 			break;	/* Remote end closed the connection */
-
-		/*
-		 * This sets conn->keep_alive to FALSE, so by default
-		 * we break the loop.
-		 */
-		reset_connection_attributes(conn);
 
 		/* 0-terminate the request: parse_request uses sscanf */
 		buf[request_len - 1] = '\0';
