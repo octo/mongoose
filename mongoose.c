@@ -916,8 +916,8 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 
 	(void) mg_snprintf(line, sizeof(line), "%s", dir);
 	fix_directory_separators(line);
-	fix_directory_separators(cmdline);
 
+	DEBUG_TRACE("%s: Running [%s]", __func__, cmdline);
 	if (CreateProcessA(NULL, cmdline, NULL, NULL, TRUE,
 	    CREATE_NEW_PROCESS_GROUP, envblk, line, &si, &pi) == 0) {
 		cry(conn, "%s: CreateProcess(%s): %d",
