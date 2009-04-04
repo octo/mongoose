@@ -906,14 +906,14 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 			(void) fclose(fp);
 		}
 		interp = line + 2;
-		(void) mg_snprintf(cmdline, sizeof(cmdline), "%s%s%s",
-		    line + 2, line[2] == '\0' ? "" : " ", prog);
 	}
 
 	if ((p = (char *) strrchr(prog, '/')) != NULL)
 		prog = p + 1;
 
-	(void) mg_snprintf(cmdline, sizeof(cmdline), "%s %s", interp, prog);
+	(void) mg_snprintf(cmdline, sizeof(cmdline), "%s%s%s",
+	    interp, interp[0] == '\0' ? "" : " ", prog);
+
 	(void) mg_snprintf(line, sizeof(line), "%s", dir);
 	fix_directory_separators(line);
 	fix_directory_separators(cmdline);
