@@ -3779,11 +3779,12 @@ worker_thread(struct mg_connection *conn)
 	}
 
 	close_connection(conn);
-	free(conn);
 
 	conn->ctx->num_threads--;
 	assert(conn->ctx->num_threads >= 0);
 	DEBUG_TRACE("%s: thread %p exiting\n", __func__, (void *) conn);
+
+	free(conn);
 }
 
 static void
