@@ -106,6 +106,7 @@
 #endif /* !fileno MINGW #defines fileno */
 
 typedef HANDLE pthread_mutex_t;
+typedef HANDLE pthread_cond_t;
 typedef HANDLE pid_t;
 
 #if !defined(S_ISDIR)
@@ -329,11 +330,13 @@ struct mg_context {
 	struct callback	callbacks[MAX_CALLBACKS];
 	int		num_callbacks;
 
-	char	*options[NUM_OPTIONS];	/* Configured opions		*/
-	pthread_mutex_t	opt_mutex;	/* Option setter/getter guard	*/
+	char		*options[NUM_OPTIONS];	/* Configured opions	*/
+	pthread_mutex_t	opt_mutex[NUM_OPTIONS];	/* Option protector	*/
 
 	int		max_threads;	/* Maximum number of threads	*/
 	int		num_threads;	/* Number of active threads	*/
+	pthread_mutex_t	thr_mutex;
+	pthread_cond_t	thr_cond;
 
 	mg_spcb_t	ssl_password_callback;
 };
@@ -694,6 +697,34 @@ static int
 pthread_mutex_unlock(pthread_mutex_t *mutex)
 {
 	return (ReleaseMutex(*mutex) == 0 ? -1 : 0);
+}
+
+static int
+pthread_cond_init(pthread_cond_t *cv, const void *unused)
+{
+	unused = NULL;
+	*cv = CreateEvent(NULL, FALSE, FALSE, NULL);
+	return (*cv == NULL ? -1 : 0);
+}
+
+static int
+pthread_cond_wait(pthread_cond_t *cv, pthread_mutex_t *mutex)
+{
+	SignalObjectAndWait(*mutex, *cv, INFINITE, FALSE);
+	WaitForSingleObject(*mutex, INFINITE);
+	return (0);
+}
+
+static int
+pthread_cond_signal(pthread_cond_t *cv)
+{
+	return (SetEvent(*cv) == 0 ? -1 : 0);
+}
+
+static int
+pthread_cond_destroy(pthread_cond_t *cv)
+{
+	return (CloseHandle(*cv) == 0 ? -1 : 0);
 }
 
 static void
@@ -1080,16 +1111,16 @@ set_non_blocking_mode(SOCKET sock)
 #endif /* _WIN32 */
 
 static void
-mg_lock(struct mg_context *ctx)
+lock_option(struct mg_context *ctx, int opt_index)
 {
-	if (pthread_mutex_lock(&ctx->opt_mutex) != 0)
+	if (pthread_mutex_lock(&ctx->opt_mutex[opt_index]) != 0)
 		cry(NULL, "pthread_mutex_lock: %s", strerror(ERRNO));
 }
 
 static void
-mg_unlock(struct mg_context *ctx)
+unlock_option(struct mg_context *ctx, int opt_index)
 {
-	if (pthread_mutex_unlock(&ctx->opt_mutex) != 0)
+	if (pthread_mutex_unlock(&ctx->opt_mutex[opt_index]) != 0)
 		cry(NULL, "pthread_mutex_unlock: %s", strerror(ERRNO));
 }
 
@@ -1299,10 +1330,12 @@ make_path(struct mg_context *ctx, const char *uri, char *buf, size_t buf_len)
 	char	*p, *s;
 	size_t	len;
 
-	mg_lock(ctx);
+	lock_option(ctx, OPT_ROOT);
 	mg_snprintf(buf, buf_len, "%s%s", ctx->options[OPT_ROOT], uri);
+	unlock_option(ctx, OPT_ROOT);
 
 	/* If requested URI has aliased prefix, use alternate root */
+	lock_option(ctx, OPT_ALIASES);
        	s = ctx->options[OPT_ALIASES];
 	FOR_EACH_WORD_IN_LIST(s, len) {
 
@@ -1316,7 +1349,7 @@ make_path(struct mg_context *ctx, const char *uri, char *buf, size_t buf_len)
 			break;
 		}
 	}
-	mg_unlock(ctx);
+	unlock_option(ctx, OPT_ALIASES);
 
 	strip_trailing_directory_separators(buf);
 #ifdef _WIN32
@@ -1975,7 +2008,7 @@ check_authorization(struct mg_connection *conn, const char *path)
 	fp = NULL;
 	authorized = TRUE;
 
-	mg_lock(conn->ctx);
+	lock_option(conn->ctx, OPT_PROTECT);
 	s = conn->ctx->options[OPT_PROTECT];
 	FOR_EACH_WORD_IN_LIST(s, len) {
 
@@ -1997,7 +2030,7 @@ check_authorization(struct mg_connection *conn, const char *path)
 			break;
 		}
 	}
-	mg_unlock(conn->ctx);
+	unlock_option(conn->ctx, OPT_PROTECT);
 
 	if (fp == NULL)
 		fp = open_auth_file(conn->ctx, path);
@@ -2372,7 +2405,7 @@ substitute_index_file(struct mg_connection *conn,
 	path[n] = DIRSEP;
 	found = FALSE;
 
-	mg_lock(conn->ctx);
+	lock_option(conn->ctx, OPT_INDEX_FILES);
 	s = conn->ctx->options[OPT_INDEX_FILES];
 	FOR_EACH_WORD_IN_LIST(s, len) {
 		if (len > path_len - n - 1)
@@ -2384,7 +2417,7 @@ substitute_index_file(struct mg_connection *conn,
 			break;
 		}
 	}
-	mg_unlock(conn->ctx);
+	unlock_option(conn->ctx, OPT_INDEX_FILES);
 
 	if (found == FALSE)
 		path[n] = '\0';
@@ -2588,10 +2621,10 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 	if ((s = strrchr(prog, '/')) != NULL)
 		script_filename = s + 1;
 
-	mg_lock(conn->ctx);
+	lock_option(conn->ctx, OPT_ROOT);
 	root = conn->ctx->options[OPT_ROOT];
 	addenv(blk, "SERVER_NAME=%s", conn->ctx->options[OPT_AUTH_DOMAIN]);
-	mg_unlock(conn->ctx);
+	unlock_option(conn->ctx, OPT_ROOT);
 
 	/* Prepare the environment block */
 	addenv(blk, "%s", "GATEWAY_INTERFACE=CGI/1.1");
@@ -2655,14 +2688,14 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 	}
 
 	/* Add user-specified variables */
-	mg_lock(conn->ctx);
+	lock_option(conn->ctx, OPT_CGI_ENV);
 	if (conn->ctx->options[OPT_CGI_ENV] != NULL) {
 		s = conn->ctx->options[OPT_CGI_ENV];
 		FOR_EACH_WORD_IN_LIST(s, len) {
 			addenv(blk, "%.*s", len, s);
 		}
 	}
-	mg_unlock(conn->ctx);
+	unlock_option(conn->ctx, OPT_CGI_ENV);
 
 	blk->vars[blk->nvars++] = NULL;
 	blk->buf[blk->len++] = '\0';
@@ -2859,10 +2892,10 @@ do_ssi_include(struct mg_connection *conn, const char *ssi, char *tag)
 	 */
 	if (sscanf(tag, " virtual=\"%[^\"]\"", file_name) == 1) {
 		/* File name is relative to the webserver root */
-		mg_lock(conn->ctx);
+		lock_option(conn->ctx, OPT_ROOT);
 		(void) mg_snprintf(path, sizeof(path), "%s%c%s",
 		    conn->ctx->options[OPT_ROOT], DIRSEP, file_name);
-		mg_unlock(conn->ctx);
+		unlock_option(conn->ctx, OPT_ROOT);
 	} else if (sscanf(tag, " file=\"%[^\"]\"", file_name) == 1) {
 		/*
 		 * File name is relative to the webserver working directory
@@ -3231,8 +3264,10 @@ mg_fini(struct mg_context *ctx)
 	close_all_listening_sockets(ctx);
 
 	/* Wait until all threads finish */
+	(void) pthread_mutex_lock(&ctx->thr_mutex);
 	while (ctx->num_threads > 0)
-		sleep(1);
+		(void) pthread_cond_wait(&ctx->thr_cond, &ctx->thr_mutex);
+	(void) pthread_mutex_unlock(&ctx->thr_mutex);
 
 	/* Deallocate all registered callbacks */
 	for (i = 0; i < ctx->num_callbacks; i++)
@@ -3254,7 +3289,12 @@ mg_fini(struct mg_context *ctx)
 	if (ctx->ssl_ctx)
 		SSL_CTX_free(ctx->ssl_ctx);
 
-	(void) pthread_mutex_destroy(&ctx->opt_mutex);
+	/* Deallocate mutexes and condvars */
+	for (i = 0; i < NUM_OPTIONS; i++)
+		(void) pthread_mutex_destroy(&ctx->opt_mutex[i]);
+
+	(void) pthread_mutex_destroy(&ctx->thr_mutex);
+	(void) pthread_cond_destroy(&ctx->thr_cond);
 
 	/* Signal mg_stop() that we're done */
 	ctx->stop_flag = 2;
@@ -3555,9 +3595,9 @@ mg_set_option(struct mg_context *ctx, const char *opt, const char *val)
 	int			i, ctx_index, retval;
 
 	DEBUG_TRACE("%s: [%s]->[%s]\n", __func__, opt, val);
-	mg_lock(ctx);
 	if (opt != NULL && (option = find_opt(opt)) != NULL) {
 		i = (int) (option - known_options);
+		lock_option(ctx, i);
 
 		if (setters[i].setter != NULL)
 			retval = setters[i].setter(ctx, val);
@@ -3571,10 +3611,10 @@ mg_set_option(struct mg_context *ctx, const char *opt, const char *val)
 
 		/* Set new option value */
 		ctx->options[ctx_index] = val ? mg_strdup(val) : NULL;
+		unlock_option(ctx, i);
 	} else {
 		retval = -1;
 	}
-	mg_unlock(ctx);
 
 	return (retval);
 }
@@ -3591,11 +3631,9 @@ mg_get_option(struct mg_context *ctx, const char *option_name)
 	const struct mg_option	*o;
 	const char			*value = NULL;
 
-	mg_lock(ctx);
 	value = NULL;
 	if ((o = find_opt(option_name)) != NULL)
 		value = ctx->options[setters[o - known_options].context_index];
-	mg_unlock(ctx);
 
 	return (value);
 }
@@ -3748,6 +3786,7 @@ process_new_connection(struct mg_connection *conn)
 			} else {
 				ri->post_data = buf + request_len;
 				ri->post_data_len = nread - request_len;
+				conn->birth_time = time(NULL);
 				analyze_request(conn);
 				log_access(conn);
 				shift_to_next(conn, buf, request_len, &nread);
@@ -3780,9 +3819,14 @@ worker_thread(struct mg_connection *conn)
 
 	close_connection(conn);
 
+	/* Signal master that we're done with connection and exiting */
+	pthread_mutex_lock(&conn->ctx->thr_mutex);
 	conn->ctx->num_threads--;
+	pthread_cond_signal(&conn->ctx->thr_cond);
 	assert(conn->ctx->num_threads >= 0);
+
 	DEBUG_TRACE("%s: thread %p exiting\n", __func__, (void *) conn);
+	pthread_mutex_unlock(&conn->ctx->thr_mutex);
 
 	free(conn);
 }
@@ -3818,8 +3862,10 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 			 * If we need to start a new thread and it is maximum
 			 * allowed already running, wait until some become idle.
 			 */
+			(void) pthread_mutex_lock(&ctx->thr_mutex);
 			while (ctx->num_threads >= ctx->max_threads)
-				sleep(0);
+				(void) pthread_cond_wait(&ctx->thr_cond,
+				    &ctx->thr_mutex);
 
 			/*
 			 * Sequence is important here: first num_threads must
@@ -3831,6 +3877,8 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 			 * TODO: add error check for start_thread().
 			 */
 			ctx->num_threads++;
+			(void) pthread_mutex_unlock(&ctx->thr_mutex);
+
 			start_thread((mg_thread_func_t) worker_thread, conn);
 		}
 	}
@@ -3848,10 +3896,10 @@ master_thread(struct mg_context *ctx)
 		max_fd = -1;
 
 		/* Add listening sockets to the read set */
-		mg_lock(ctx);
+		lock_option(ctx, OPT_PORTS);
 		for (i = 0; i < ctx->num_listeners; i++)
 			add_to_set(ctx->listeners[i].sock, &read_set, &max_fd);
-		mg_unlock(ctx);
+		unlock_option(ctx, OPT_PORTS);
 
 		tv.tv_sec = 1;
 		tv.tv_usec = 0;
@@ -3867,12 +3915,12 @@ master_thread(struct mg_context *ctx)
 			Sleep(1000);
 #endif /* _WIN32 */
 		} else {
-			mg_lock(ctx);
+			lock_option(ctx, OPT_PORTS);
 			for (i = 0; i < ctx->num_listeners; i++)
 				if (FD_ISSET(ctx->listeners[i].sock, &read_set))
 					accept_new_connection(
 					    ctx->listeners + i, ctx);
-			mg_unlock(ctx);
+			unlock_option(ctx, OPT_PORTS);
 		}
 	}
 
@@ -3887,7 +3935,7 @@ mg_stop(struct mg_context *ctx)
 
 	/* Wait until mg_fini() stops */
 	while (ctx->stop_flag != 2)
-		sleep(1);
+		(void) sleep(1);
 
 	assert(ctx->num_threads == 0);
 	free(ctx);
@@ -3944,8 +3992,14 @@ mg_start(void)
 	(void) signal(SIGPIPE, SIG_IGN);
 #endif /* _WIN32 */
 
+	/* Initialize options mutexes */
+	for (i = 0; i < NUM_OPTIONS; i++)
+		(void) pthread_mutex_init(&ctx->opt_mutex[i], NULL);
+
+	(void) pthread_mutex_init(&ctx->thr_mutex, NULL);
+	(void) pthread_cond_init(&ctx->thr_cond, NULL);
+
 	/* Start master (listening) thread */
-	(void) pthread_mutex_init(&ctx->opt_mutex, NULL);
 	start_thread((mg_thread_func_t) master_thread, ctx);
 
 	return (ctx);

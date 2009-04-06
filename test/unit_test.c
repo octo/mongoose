@@ -76,7 +76,8 @@ test_make_path(void)
 	struct mg_context	fake_context;
 
 	/* make_path() locks the options mutex, so initialize it before */
-	pthread_mutex_init(&fake_context.opt_mutex, NULL);
+	pthread_mutex_init(&fake_context.opt_mutex[OPT_ROOT], NULL);
+	pthread_mutex_init(&fake_context.opt_mutex[OPT_ALIASES], NULL);
 
 	/* Loop through all URIs, making paths and comparing with expected. */
 	for (i = 0; tests[i].uri != NULL; i++) {
@@ -93,7 +94,8 @@ test_make_path(void)
 	}
 
 	/* Cleanup - destroy the mutex */
-	pthread_mutex_destroy(&fake_context.opt_mutex);
+	pthread_mutex_destroy(&fake_context.opt_mutex[OPT_ROOT]);
+	pthread_mutex_destroy(&fake_context.opt_mutex[OPT_ALIASES]);
 }
 
 int main(int argc, char *argv[])
