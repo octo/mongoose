@@ -3850,6 +3850,7 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 			cry(NULL, "%s: %s is not allowed to connect",
 			    __func__, inet_ntoa(accepted.usa.u.sin.sin_addr));
 			(void) closesocket(accepted.sock);
+			unlock_option(ctx, OPT_ACL);
 			continue;
 		}
 		unlock_option(ctx, OPT_ACL);
