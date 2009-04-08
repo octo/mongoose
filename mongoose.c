@@ -3038,9 +3038,9 @@ analyze_request(struct mg_connection *conn)
 	} else
 #endif /* !NO_AUTH */
 	if ((cb = find_callback(conn->ctx, FALSE, uri, -1)) != NULL) {
-		if (strcmp(ri->request_method, "POST") ||
-		    (!strcmp(ri->request_method, "POST") &&
-		    handle_request_body(conn, -1)))
+		if ((strcmp(ri->request_method, "POST") != 0 &&
+		    strcmp(ri->request_method, "PUT") != 0) ||
+		    handle_request_body(conn, -1))
 			cb->func(conn, &conn->request_info, cb->user_data);
 	} else
 #if !defined(NO_AUTH)

@@ -415,6 +415,9 @@ sub do_embedded_test {
 	o("POST /test_get_var HTTP/1.0\nContent-Length: 64007\n\n".
 		"my_var=$my_var", 'Value size: \[64000\]', 'mg_get_var 8', 0);
 
+	# Test PUT
+	o("PUT /put HTTP/1.0\nContent-Length: 3\n\nabc",
+			'\nabc$', 'put callback', 0);
 
 	o("POST /test_get_request_info?xx=yy HTTP/1.0\nFoo: bar\n".
 		"Content-Length: 3\n\na=b",

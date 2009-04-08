@@ -148,6 +148,14 @@ test_post(struct mg_connection *conn, const struct mg_request_info *ri,
 	mg_write(conn, ri->post_data, ri->post_data_len);
 }
 
+static void
+test_put(struct mg_connection *conn, const struct mg_request_info *ri,
+		void *user_data)
+{
+	mg_printf(conn, "%s", standard_reply);
+	mg_write(conn, ri->post_data, ri->post_data_len);
+}
+
 int main(void)
 {
 	int	user_data = 1234;
@@ -161,6 +169,7 @@ int main(void)
 	mg_bind_to_uri(ctx, "/foo/*", &test_get_ri, NULL);
 	mg_bind_to_uri(ctx, "/test_user_data", &test_user_data, &user_data);
 	mg_bind_to_uri(ctx, "/p", &test_post, NULL);
+	mg_bind_to_uri(ctx, "/put", &test_put, NULL);
 
 	mg_bind_to_error_code(ctx, 404, &test_error, NULL);
 	mg_bind_to_error_code(ctx, 0, &test_error, NULL);
