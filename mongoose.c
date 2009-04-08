@@ -3844,12 +3844,17 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 	    	    &accepted.usa.u.sa, &accepted.usa.len)) == INVALID_SOCKET)
 			break;
 
+		lock_option(ctx, OPT_ACL);
 		if (ctx->options[OPT_ACL] != NULL &&
 		    !check_acl(ctx->options[OPT_ACL], &accepted.usa)) {
 			cry(NULL, "%s: %s is not allowed to connect",
 			    __func__, inet_ntoa(accepted.usa.u.sin.sin_addr));
 			(void) closesocket(accepted.sock);
-		} else if ((conn = calloc(1, sizeof(*conn))) == NULL) {
+			continue;
+		}
+		unlock_option(ctx, OPT_ACL);
+
+		if ((conn = calloc(1, sizeof(*conn))) == NULL) {
 			cry(NULL, "%s: cannot allocate new socket", __func__);
 			(void) closesocket(accepted.sock);
 		} else {
