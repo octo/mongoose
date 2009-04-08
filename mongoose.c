@@ -3885,7 +3885,12 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 			ctx->num_threads++;
 			(void) pthread_mutex_unlock(&ctx->thr_mutex);
 
-			start_thread((mg_thread_func_t) worker_thread, conn);
+			if (start_thread((mg_thread_func_t)
+			    worker_thread, conn) != 0) {
+				cry(NULL, "Cannot start thread: %d", ERRNO);
+				(void) closesocket(accepted.sock);
+				free(conn);
+			}
 		}
 	}
 }
