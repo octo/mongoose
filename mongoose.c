@@ -1360,19 +1360,33 @@ make_path(struct mg_context *ctx, const char *uri, char *buf, size_t buf_len)
 }
 
 /*
- * Setup listening socket on given port, return socket
+ * Setup listening socket on given address, return socket.
+ * Address format: [local_ip_address:]port_number
  */
 static SOCKET
-mg_open_listening_port(int port)
+mg_open_listening_port(const char *str)
 {
 	SOCKET		sock;
-	int		on = 1;
+	int		on = 1, a, b, c, d, port;
 	struct usa	sa;
+
+	/* MacOS needs that. If we do not zero it, bind() will fail. */
+	(void) memset(&sa, 0, sizeof(sa));
+
+	if (sscanf(str, "%d.%d.%d.%d:%d", &a, &b, &c, &d, &port) == 5) {
+		/* IP address to bind to is specified */
+		sa.u.sin.sin_addr.s_addr =
+		    htonl((a << 24) | (b << 16) | (c << 8) | d);
+	} else if (sscanf(str, "%d", &port) == 1) {
+		/* Only port number is specified. Bind to all addresses */
+		sa.u.sin.sin_addr.s_addr = htonl(INADDR_ANY);
+	} else {
+		return (INVALID_SOCKET);
+	}
 
 	sa.len				= sizeof(sa.u.sin);
 	sa.u.sin.sin_family		= AF_INET;
 	sa.u.sin.sin_port		= htons((uint16_t) port);
-	sa.u.sin.sin_addr.s_addr	= htonl(INADDR_ANY);
 
 	if ((sock = socket(PF_INET, SOCK_STREAM, 6)) != INVALID_SOCKET &&
 	    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
@@ -1384,7 +1398,7 @@ mg_open_listening_port(int port)
 		set_non_blocking_mode(sock);
 	} else {
 		/* Error */
-		cry(NULL, "%s(%d): %s", __func__, port, strerror(errno));
+		cry(NULL, "%s(%d): %s %d", __func__, port, strerror(errno));
 		if (sock != INVALID_SOCKET)
 			(void) closesocket(sock);
 		sock = INVALID_SOCKET;
@@ -3114,21 +3128,21 @@ set_ports_option(struct mg_context *ctx, const char *p)
 {
 	SOCKET	sock;
 	size_t	len;
-	int	is_ssl, port;
+	int	is_ssl;
 
 	close_all_listening_sockets(ctx);
+	assert(ctx->num_listeners == 0);
 
 	FOR_EACH_WORD_IN_LIST(p, len) {
 
 		is_ssl	= p[len - 1] == 's' ? TRUE : FALSE;
-		port	= atoi(p);
 
 		if (ctx->num_listeners >=
 		    (int) (ARRAY_SIZE(ctx->listeners) - 1)) {
 			cry(NULL, "%s", "Too many listeninig sockets");
 			return (FALSE);
-		} else if ((sock = mg_open_listening_port(port)) == -1) {
-			cry(NULL, "cannot open port %d", port);
+		} else if ((sock = mg_open_listening_port(p)) == -1) {
+			cry(NULL, "cannot bind to %.*s", len, p);
 			return (FALSE);
 		} else if (is_ssl == TRUE && ctx->ssl_ctx == NULL) {
 			(void) closesocket(sock);
