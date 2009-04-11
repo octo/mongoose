@@ -1398,7 +1398,7 @@ mg_open_listening_port(const char *str)
 		set_non_blocking_mode(sock);
 	} else {
 		/* Error */
-		cry(NULL, "%s(%d): %s %d", __func__, port, strerror(errno));
+		cry(NULL, "%s(%d): %s", __func__, port, strerror(errno));
 		if (sock != INVALID_SOCKET)
 			(void) closesocket(sock);
 		sock = INVALID_SOCKET;
