@@ -62,13 +62,19 @@ test_fix_directory_separators(void)
 static void
 test_make_path(void)
 {
+#if defined(_WIN32)
+#define	SLASH	"\\"
+#else
+#define	SLASH	"/"
+#endif
 	struct {char *uri, *aliases, *root, *result;} tests[] = {
-		{"////", "", "/", "/"},
-		{"/xyz//", "/x=/y", "/", "/yyz"},
-		{"/xyz//", "/x/=/y", "/", "//xyz"},
-		{"/xyz//", "/x/=/y", "/boo", "/boo/xyz"},
-		{"/", "/x=/y", "/foo", "/foo"},
-		{"/x/y/z", "/a=/b,,/x=/y,/c=/d", "/foo", "/y/y/z"},
+		{"////", "", "/", SLASH},
+		{"/xyz//", "/x=/y", "/", SLASH "yyz"},
+		{"/xyz//", "/x/=/y", "/", SLASH SLASH "xyz"},
+		{"/xyz//", "/x/=/y", "/boo", SLASH "boo" SLASH "xyz"},
+		{"/", "/x=/y", "/foo", SLASH "foo"},
+		{"/x/y/z", "/a=/b,,/x=/y,/c=/d", "/foo",
+			SLASH "y" SLASH "y" SLASH "z"},
 		{NULL, NULL, NULL, NULL},
 	};
 	char		buf[FILENAME_MAX];
