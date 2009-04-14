@@ -39,7 +39,8 @@ mac:
 	$(CC) $(CFLAGS) mongoose.c main.c -lpthread -o $(PROG)
 
 solaris:
-	gcc $(CFLAGS) mongoose.c -shared -lpthread -lnsl -lsocket -s -fpic -fPIC -o $(LIB)
+	gcc $(CFLAGS) mongoose.c -lpthread -lnsl \
+		-lsocket -s -fpic -fPIC -shared -o $(LIB)
 	gcc $(CFLAGS) mongoose.c main.c -lpthread -lnsl -lsocket -s -o $(PROG)
 
 
@@ -54,8 +55,8 @@ solaris:
 #    (or Itanium/amd64 command promt to build x64 version)
 # 4. In the command prompt, go to mongoose directory and do "nmake windows"
 
-WINDBG=	/Zi /DDEBUG /Od
-#WINDBG=	/DNDEBUG /Os /Oi /GL /Gy
+#WINDBG=	/Zi /DDEBUG /Od
+WINDBG=	/DNDEBUG /Os /Oi /GL /Gy
 WINOPT=	/MT /TC $(WINDBG) /nologo /W4 \
 	/D_CRT_SECURE_NO_WARNINGS /DHAVE_STRTOUI64
 windows:
