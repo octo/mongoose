@@ -1395,7 +1395,6 @@ mg_open_listening_port(const char *str)
 	    listen(sock, 128) == 0) {
 		/* Success */
 		set_close_on_exec(sock);
-		set_non_blocking_mode(sock);
 	} else {
 		/* Error */
 		cry(NULL, "%s(%d): %s", __func__, port, strerror(errno));
@@ -3851,60 +3850,57 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 	struct socket		accepted;
 	struct mg_connection	*conn;
 
-	/* Keep accepting connections until there are no new left */
-	for (;;) {
-		accepted.usa.len = sizeof(accepted.usa.u.sin);
-		if ((accepted.sock = accept(listener->sock,
-	    	    &accepted.usa.u.sa, &accepted.usa.len)) == INVALID_SOCKET)
-			break;
+	accepted.usa.len = sizeof(accepted.usa.u.sin);
+	if ((accepted.sock = accept(listener->sock,
+	    &accepted.usa.u.sa, &accepted.usa.len)) == INVALID_SOCKET)
+		return;
 
-		lock_option(ctx, OPT_ACL);
-		if (ctx->options[OPT_ACL] != NULL &&
-		    !check_acl(ctx->options[OPT_ACL], &accepted.usa)) {
-			cry(NULL, "%s: %s is not allowed to connect",
-			    __func__, inet_ntoa(accepted.usa.u.sin.sin_addr));
-			(void) closesocket(accepted.sock);
-			unlock_option(ctx, OPT_ACL);
-			continue;
-		}
+	lock_option(ctx, OPT_ACL);
+	if (ctx->options[OPT_ACL] != NULL &&
+	    !check_acl(ctx->options[OPT_ACL], &accepted.usa)) {
+		cry(NULL, "%s: %s is not allowed to connect",
+		    __func__, inet_ntoa(accepted.usa.u.sin.sin_addr));
+		(void) closesocket(accepted.sock);
 		unlock_option(ctx, OPT_ACL);
+		return;
+	}
+	unlock_option(ctx, OPT_ACL);
 
-		if ((conn = calloc(1, sizeof(*conn))) == NULL) {
-			cry(NULL, "%s: cannot allocate new socket", __func__);
+	if ((conn = calloc(1, sizeof(*conn))) == NULL) {
+		cry(NULL, "%s: cannot allocate new socket", __func__);
+		(void) closesocket(accepted.sock);
+	} else {
+		accepted.is_ssl = listener->is_ssl;
+		conn->client = accepted;
+		conn->ctx = ctx;
+		conn->birth_time = time(NULL);
+
+		/*
+		 * If we need to start a new thread and it is maximum
+		 * allowed already running, wait until some become idle.
+		 */
+		(void) pthread_mutex_lock(&ctx->thr_mutex);
+		while (ctx->num_threads >= ctx->max_threads)
+			(void) pthread_cond_wait(&ctx->thr_cond,
+			    &ctx->thr_mutex);
+
+		/*
+		 * Sequence is important here: first num_threads must
+		 * be incremented, and then new thread started.
+		 * Otherwise, worker thread may do num_threads--
+		 * before master does num_threads++, breaking the
+		 * assertion. Thanks to blavier@adeneo.eu for helping
+		 * to debug this.
+		 * TODO: add error check for start_thread().
+		 */
+		ctx->num_threads++;
+		(void) pthread_mutex_unlock(&ctx->thr_mutex);
+
+		if (start_thread((mg_thread_func_t)
+		    worker_thread, conn) != 0) {
+			cry(NULL, "Cannot start thread: %d", ERRNO);
 			(void) closesocket(accepted.sock);
-		} else {
-			accepted.is_ssl = listener->is_ssl;
-			conn->client = accepted;
-			conn->ctx = ctx;
-			conn->birth_time = time(NULL);
-
-			/*
-			 * If we need to start a new thread and it is maximum
-			 * allowed already running, wait until some become idle.
-			 */
-			(void) pthread_mutex_lock(&ctx->thr_mutex);
-			while (ctx->num_threads >= ctx->max_threads)
-				(void) pthread_cond_wait(&ctx->thr_cond,
-				    &ctx->thr_mutex);
-
-			/*
-			 * Sequence is important here: first num_threads must
-			 * be incremented, and then new thread started.
-			 * Otherwise, worker thread may do num_threads--
-			 * before master does num_threads++, breaking the
-			 * assertion. Thanks to blavier@adeneo.eu for helping
-			 * to debug this.
-			 * TODO: add error check for start_thread().
-			 */
-			ctx->num_threads++;
-			(void) pthread_mutex_unlock(&ctx->thr_mutex);
-
-			if (start_thread((mg_thread_func_t)
-			    worker_thread, conn) != 0) {
-				cry(NULL, "Cannot start thread: %d", ERRNO);
-				(void) closesocket(accepted.sock);
-				free(conn);
-			}
+			free(conn);
 		}
 	}
 }
