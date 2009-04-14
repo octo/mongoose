@@ -3970,6 +3970,7 @@ struct mg_context *
 mg_start(void)
 {
 	struct mg_context	*ctx;
+	char			web_root[FILENAME_MAX];
 	int			i;
 
 #if defined(_WIN32)
@@ -3999,8 +4000,13 @@ mg_start(void)
 			}
 
 	/* Initial document root is set to current working directory */
-	if (ctx->options[OPT_ROOT] == NULL)
-		ctx->options[OPT_ROOT] = getcwd(NULL, 0);
+	if (ctx->options[OPT_ROOT] == NULL) {
+		if (getcwd(web_root, sizeof(web_root)) == NULL) {
+			cry(NULL, "%s: getcwd: %s", __func__, strerror(errno));
+			mg_strlcpy(web_root, ".", sizeof(web_root));
+		}
+		ctx->options[OPT_ROOT] = mg_strdup(web_root);
+	}
 
 	strip_trailing_directory_separators(ctx->options[OPT_ROOT]);
 	DEBUG_TRACE("%s: root [%s]\n", __func__, ctx->options[OPT_ROOT]);
