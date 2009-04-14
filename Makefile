@@ -4,7 +4,7 @@
 PROG=	mongoose
 
 all:
-	@echo "make (linux|bsd|mac|windows|mingw)"
+	@echo "make (linux|bsd|solaris|mac|windows|mingw)"
 
 # Possible COPT values: (in brackets are rough numbers for 'gcc -O2' on i386)
 # -DHAVE_MD5		- use system md5 library (-2kb)
@@ -37,6 +37,10 @@ bsd:
 mac:
 	$(CC) $(CFLAGS) $(MAC_SHARED) mongoose.c -lpthread -o $(LIB)
 	$(CC) $(CFLAGS) mongoose.c main.c -lpthread -o $(PROG)
+
+solaris:
+	gcc $(CFLAGS) mongoose.c -shared -lpthread -lnsl -lsocket -s -fpic -fPIC -o $(LIB)
+	gcc $(CFLAGS) mongoose.c main.c -lpthread -lnsl -lsocket -s -o $(PROG)
 
 
 ##########################################################################
