@@ -39,7 +39,7 @@
 #if !defined(__LCC__)
 #define	strdup(x)		_strdup(x)
 #endif /* !MINGW */
-#define	pause()			Sleep(INT_MAX)
+#define	sleep(x)		Sleep((x) * 1000)
 #else
 #include <sys/wait.h>
 #include <unistd.h>		/* For pause() */
@@ -361,7 +361,7 @@ main(int argc, char *argv[])
 			mg_get_option(ctx, "root"));
 	fflush(stdout);
 	while (exit_flag == 0)
-		pause();
+		sleep(1);
 
 	(void) printf("Exiting on signal %d, "
 	    "waiting for all threads to finish...", exit_flag);
