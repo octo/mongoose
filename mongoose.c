@@ -634,6 +634,17 @@ find_callback(const struct mg_context *ctx, bool_t is_auth,
 	return (NULL);
 }
 
+static bool_t
+does_client_want_keep_alive(const struct mg_connection *conn)
+{
+	const char *value = mg_get_header(conn, "Connection");
+
+	/* HTTP/1.1 assumes keep-alive, if Connection header is not set */
+	return ((value == NULL && conn->request_info.http_version_major == 1 &&
+	    conn->request_info.http_version_minor == 1) || (value != NULL &&
+	    !mg_strcasecmp(value, "keep-alive")));
+}
+
 /*
  * Send error message back to a client.
  */
@@ -652,23 +663,30 @@ send_error(struct mg_connection *conn, int status, const char *reason,
 	if ((cb = find_callback(conn->ctx, FALSE, NULL, status)) != NULL) {
 		cb->func(conn, &conn->request_info, cb->user_data);
 	} else {
-		(void) mg_printf(conn,
-		    "HTTP/1.1 %d %s\r\n"
-		    "Content-Type: text/plain\r\n"
-		    "Connection: close\r\n"
-		    "\r\n", status, reason);
+		buf[0] = '\0';
+		len = 0;
 
 		/* Errors 1xx, 204 and 304 MUST NOT send a body */
 		if (status > 199 && status != 204 && status != 304) {
-			conn->num_bytes_sent = mg_printf(conn,
+			len = mg_snprintf(buf, sizeof(buf),
 			    "Error %d: %s\n", status, reason);
 
 			va_start(ap, fmt);
-			len = mg_vsnprintf(buf, sizeof(buf), fmt, ap);
+			len += mg_vsnprintf(buf + len, sizeof(buf) - len,
+			    fmt, ap);
 			va_end(ap);
-			conn->num_bytes_sent += mg_write(conn, buf, len);
+			conn->num_bytes_sent = len;
 			cry(conn, "%s", buf);
 		}
+
+		conn->keep_alive = does_client_want_keep_alive(conn);
+		(void) mg_printf(conn,
+		    "HTTP/1.1 %d %s\r\n"
+		    "Content-Type: text/plain\r\n"
+		    "Content-Length: %d\r\n"
+		    "Connection: %s\r\n"
+		    "\r\n%s", status, reason, len,
+		    conn->keep_alive ? "keep-alive" : "close", buf);
 	}
 }
 
@@ -2094,17 +2112,6 @@ is_authorized_for_put(struct mg_connection *conn)
 	return (ret);
 }
 #endif /* NO_AUTH */
-
-static bool_t
-does_client_want_keep_alive(const struct mg_connection *conn)
-{
-	const char *value = mg_get_header(conn, "Connection");
-
-	/* HTTP/1.1 assumes keep-alive, if Connection header is not set */
-	return ((value == NULL && conn->request_info.http_version_major == 1 &&
-	    conn->request_info.http_version_minor == 1) || (value != NULL &&
-	    !mg_strcasecmp(value, "keep-alive")));
-}
 
 struct de {
 	struct mg_connection	*conn;
