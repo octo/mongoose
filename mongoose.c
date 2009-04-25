@@ -209,6 +209,7 @@ typedef struct ssl_ctx_st SSL_CTX;
 #define	SSL_ERROR_WANT_READ	2
 #define	SSL_ERROR_WANT_WRITE	3
 #define SSL_FILETYPE_PEM	1
+#define	CRYPTO_LOCK		1
 
 /*
  * Dynamically loaded SSL functionality
@@ -239,6 +240,11 @@ struct ssl_func {
 #define SSL_CTX_set_default_passwd_cb(x,y) \
 	(* (void (*)(SSL_CTX *, mg_spcb_t))FUNC(13))((x),(y))
 #define SSL_CTX_free(x) (* (void (*)(SSL_CTX *))FUNC(14))(x)
+#define CRYPTO_num_locks(x) (* (int (*)(void))FUNC(15))(x)
+#define CRYPTO_set_locking_callback(x)					\
+	(* (void (*)(void (*)(int, int, const char *, int)))FUNC(16))(x)
+#define CRYPTO_set_id_callback(x)					\
+	(* (void (*)(unsigned long (*)(void)))FUNC(17))(x)
 
 static struct ssl_func	ssl_sw[] = {
 	{"SSL_free",			NULL},
@@ -256,6 +262,9 @@ static struct ssl_func	ssl_sw[] = {
 	{"SSL_CTX_use_certificate_file",NULL},
 	{"SSL_CTX_set_default_passwd_cb",NULL},
 	{"SSL_CTX_free",		NULL},
+	{"CRYPTO_num_locks",		NULL},
+	{"CRYPTO_set_locking_callback",	NULL},
+	{"CRYPTO_set_id_callback",	NULL},
 	{NULL,				NULL}
 };
 
@@ -743,6 +752,12 @@ static int
 pthread_cond_destroy(pthread_cond_t *cv)
 {
 	return (CloseHandle(*cv) == 0 ? -1 : 0);
+}
+
+static pthread_t
+pthread_self(void)
+{
+	return ((pthread_t) GetCurrentThread());
 }
 
 static void
@@ -3349,6 +3364,26 @@ mg_set_ssl_password_callback(struct mg_context *ctx, mg_spcb_t func)
 	ctx->ssl_password_callback = func;
 }
 
+static pthread_mutex_t *ssl_mutexes;
+
+static void
+ssl_locking_callback(int mode, int mutex_num, const char *file, int line)
+{
+	line = 0;	/* Unused */
+	file = NULL;	/* Unused */
+
+        if (mode & CRYPTO_LOCK)
+                (void) pthread_mutex_lock(&ssl_mutexes[mutex_num]);
+        else
+                (void) pthread_mutex_unlock(&ssl_mutexes[mutex_num]);
+} 
+
+static unsigned long
+ssl_id_callback(void)
+{
+	return ((unsigned long) pthread_self());
+} 
+
 /*
  * Dynamically load SSL library. Set up ctx->ssl_ctx pointer.
  */
@@ -3359,7 +3394,7 @@ set_ssl_option(struct mg_context *ctx, const char *pem)
 	void		*lib;
 	union {void *p; void (*fp)(void);} u;
 	struct ssl_func	*fp;
-	int		retval = FALSE;
+	int		i, size, retval = FALSE;
 
 	/* Load SSL library dynamically */
 	if ((lib = dlopen(SSL_LIB, RTLD_LAZY)) == NULL) {
@@ -3404,6 +3439,23 @@ set_ssl_option(struct mg_context *ctx, const char *pem)
 	else
 		retval = TRUE;
 
+	/*
+	 * Initialize locking callbacks, needed for thread safety.
+	 * http://www.openssl.org/support/faq.html#PROG1
+	 */
+	size = sizeof(pthread_mutex_t) * CRYPTO_num_locks();
+	if ((ssl_mutexes = malloc(size)) == NULL) {
+		cry(NULL, "%s: cannot allocate mutexes", __func__);
+		return (FALSE);
+	}
+
+	for (i = 0; i < CRYPTO_num_locks(); i++)
+		pthread_mutex_init(&ssl_mutexes[i], NULL);
+
+	CRYPTO_set_locking_callback(&ssl_locking_callback);
+	CRYPTO_set_id_callback(&ssl_id_callback);
+
+	/* Done with everything. Save the context. */
 	ctx->ssl_ctx = CTX;
 
 	return (retval);
