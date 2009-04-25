@@ -107,6 +107,7 @@
 
 typedef HANDLE pthread_mutex_t;
 typedef HANDLE pthread_cond_t;
+typedef HANDLE pthread_t;
 typedef HANDLE pid_t;
 
 #if !defined(S_ISDIR)
@@ -240,7 +241,7 @@ struct ssl_func {
 #define SSL_CTX_set_default_passwd_cb(x,y) \
 	(* (void (*)(SSL_CTX *, mg_spcb_t))FUNC(13))((x),(y))
 #define SSL_CTX_free(x) (* (void (*)(SSL_CTX *))FUNC(14))(x)
-#define CRYPTO_num_locks(x) (* (int (*)(void))FUNC(15))(x)
+#define CRYPTO_num_locks() (* (int (*)(void))FUNC(15))()
 #define CRYPTO_set_locking_callback(x)					\
 	(* (void (*)(void (*)(int, int, const char *, int)))FUNC(16))(x)
 #define CRYPTO_set_id_callback(x)					\
