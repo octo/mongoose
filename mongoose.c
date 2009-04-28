@@ -3163,7 +3163,8 @@ set_ports_option(struct mg_context *ctx, const char *p)
 		    (int) (ARRAY_SIZE(ctx->listeners) - 1)) {
 			cry(NULL, "%s", "Too many listeninig sockets");
 			return (FALSE);
-		} else if ((sock = mg_open_listening_port(p)) == -1) {
+		} else if ((sock = mg_open_listening_port(p)) ==
+		    INVALID_SOCKET) {
 			cry(NULL, "cannot bind to %.*s", len, p);
 			return (FALSE);
 		} else if (is_ssl == TRUE && ctx->ssl_ctx == NULL) {
