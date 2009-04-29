@@ -330,6 +330,8 @@ unless (scalar(@ARGV) > 0 and $ARGV[0] eq "basic_tests") {
 		"ssi_begin.+$word.+ssi_end", 'SSI #include file= (absolute)');
 	o("GET /ssi7.shtml HTTP/1.0\n\n",
 		'ssi_begin.+Unit test.+ssi_end', 'SSI #include "..."');
+	o("GET /ssi8.shtml HTTP/1.0\n\n",
+		'ssi_begin.+CFLAGS.+ssi_end', 'SSI nested #includes');
 
 	# Manipulate the passwords file
 	my $path = 'test_htpasswd';

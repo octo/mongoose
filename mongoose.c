@@ -2916,8 +2916,11 @@ put_file(struct mg_connection *conn, const char *path)
 #endif /* NO_AUTH */
 
 #if !defined(NO_SSI)
+static void send_ssi_file(struct mg_connection *, const char *, FILE *, int);
+
 static void
-do_ssi_include(struct mg_connection *conn, const char *ssi, char *tag)
+do_ssi_include(struct mg_connection *conn, const char *ssi, char *tag,
+		int include_level)
 {
 	char	file_name[BUFSIZ], path[FILENAME_MAX], *p;
 	FILE	*fp;
@@ -2955,7 +2958,13 @@ do_ssi_include(struct mg_connection *conn, const char *ssi, char *tag)
 		    tag, path, strerror(ERRNO));
 	} else {
 		set_close_on_exec(fileno(fp));
-		send_opened_file_stream(conn, fileno(fp), ~0ULL);
+		if (match_extension(path,
+		    conn->ctx->options[OPT_SSI_EXTENSIONS])) {
+			cry(conn, "WOOOOO");
+			send_ssi_file(conn, path, fp, include_level + 1);
+		} else {
+			send_opened_file_stream(conn, fileno(fp), ~0ULL);
+		}
 		(void) fclose(fp);
 	}
 }
@@ -2977,10 +2986,16 @@ do_ssi_exec(struct mg_connection *conn, char *tag)
 }
 
 static void
-send_ssi_file(struct mg_connection *conn, const char *path, FILE *fp)
+send_ssi_file(struct mg_connection *conn, const char *path, FILE *fp,
+		int include_level)
 {
 	char	buf[BUFSIZ];
 	int	ch, len, in_ssi_tag;
+
+	if (include_level > 10) {
+		cry(conn, "SSI #include level is too deep (%s)", path);
+		return;
+	}
 
 	in_ssi_tag = FALSE;
 	len = 0;
@@ -2996,7 +3011,8 @@ send_ssi_file(struct mg_connection *conn, const char *path, FILE *fp)
 				(void) mg_write(conn, buf, len);
 			} else {
 				if (!memcmp(buf + 5, "include", 7)) {
-					do_ssi_include(conn, path, buf + 12);
+					do_ssi_include(conn, path, buf + 12,
+					    include_level);
 				} else if (!memcmp(buf + 5, "exec", 4)) {
 					do_ssi_exec(conn, buf + 9);
 				} else {
@@ -3047,7 +3063,7 @@ send_ssi(struct mg_connection *conn, const char *path)
 		set_close_on_exec(fileno(fp));
 		(void) mg_printf(conn, "%s", "HTTP/1.1 200 OK\r\n"
 		    "Content-Type: text/html\r\nConnection: close\r\n\r\n");
-		send_ssi_file(conn, path, fp);
+		send_ssi_file(conn, path, fp, 0);
 		(void) fclose(fp);
 	}
 }
