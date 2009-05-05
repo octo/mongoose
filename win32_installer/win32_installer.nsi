@@ -16,8 +16,7 @@ Section "Mongoose files (required)"
   SectionIn RO
   SetOutPath $INSTDIR
   File ..\mongoose.exe
-  File ..\mongoose.dll
-  File ..\mongoose.lib
+  File ..\_mongoose.dll
   File mongoose.conf
   File README.txt
   WriteUninstaller uninstall.exe
