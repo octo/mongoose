@@ -1,4 +1,4 @@
-!define VERSION "2.6"
+!define VERSION "2.7"
 !define MENUDIR "Mongoose web server"
 !define	SVC "Mongoose ${VERSION}"
 
