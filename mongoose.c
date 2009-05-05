@@ -525,16 +525,6 @@ mg_snprintf(char *buf, size_t buflen, const char *fmt, ...)
 	return (n);
 }
 
-static void
-strip_trailing_directory_separators(char *path)
-{
-	char	*p;
-
-	p = path + strlen(path) - 1;
-	while (p > path && IS_DIRSEP_CHAR(*p))
-		*p-- = '\0';
-}
-
 /*
  * Convert string representing a boolean value to a boolean value
  */
@@ -1392,7 +1382,6 @@ make_path(struct mg_context *ctx, const char *uri, char *buf, size_t buf_len)
 	}
 	unlock_option(ctx, OPT_ALIASES);
 
-	strip_trailing_directory_separators(buf);
 #ifdef _WIN32
 	for (p = buf; *p != '\0'; p++)
 		if (*p == '/')
@@ -4098,7 +4087,6 @@ mg_start(void)
 		ctx->options[OPT_ROOT] = mg_strdup(web_root);
 	}
 
-	strip_trailing_directory_separators(ctx->options[OPT_ROOT]);
 	DEBUG_TRACE("%s: root [%s]\n", __func__, ctx->options[OPT_ROOT]);
 
 #if 0
