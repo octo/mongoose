@@ -67,6 +67,7 @@
 #define	ERRNO			GetLastError()
 #define	NO_SOCKLEN_T
 #define	SSL_LIB			"ssleay32.dll"
+#define	CRYPTO_LIB		"libeay32.dll"
 #define	DIRSEP			'\\'
 #define	IS_DIRSEP_CHAR(c)	((c) == '/' || (c) == '\\')
 #define	O_NONBLOCK		0
@@ -150,6 +151,7 @@ typedef struct DIR {
 #include <dlfcn.h>
 #include <pthread.h>
 #define	SSL_LIB			"libssl.so"
+#define	CRYPTO_LIB		"libcrypto.so"
 #define	DIRSEP			'/'
 #define	IS_DIRSEP_CHAR(c)	((c) == '/')
 #define	O_BINARY		0
@@ -220,32 +222,33 @@ struct ssl_func {
 	void		(*ptr)(void);	/* Function pointer	*/
 };
 
-#define	FUNC(x)	ssl_sw[x].ptr
-
-#define	SSL_free(x)	(* (void (*)(SSL *)) FUNC(0))(x)
-#define	SSL_accept(x)	(* (int (*)(SSL *)) FUNC(1))(x)
-#define	SSL_connect(x)	(* (int (*)(SSL *)) FUNC(2))(x)
-#define	SSL_read(x,y,z)	(* (int (*)(SSL *, void *, int)) FUNC(3))((x),(y),(z))
-#define	SSL_write(x,y,z) \
-	(* (int (*)(SSL *, const void *,int)) FUNC(4))((x), (y), (z))
-#define	SSL_get_error(x,y)(* (int (*)(SSL *, int)) FUNC(5))((x), (y))
-#define	SSL_set_fd(x,y)	(* (int (*)(SSL *, SOCKET)) FUNC(6))((x), (y))
-#define	SSL_new(x)	(* (SSL * (*)(SSL_CTX *)) FUNC(7))(x)
-#define	SSL_CTX_new(x)	(* (SSL_CTX * (*)(SSL_METHOD *)) FUNC(8))(x)
-#define	SSLv23_server_method()	(* (SSL_METHOD * (*)(void)) FUNC(9))()
-#define	SSL_library_init() (* (int (*)(void)) FUNC(10))()
+#define	SSL_free(x)	(* (void (*)(SSL *)) ssl_sw[0].ptr)(x)
+#define	SSL_accept(x)	(* (int (*)(SSL *)) ssl_sw[1].ptr)(x)
+#define	SSL_connect(x)	(* (int (*)(SSL *)) ssl_sw[2].ptr)(x)
+#define	SSL_read(x,y,z)	(* (int (*)(SSL *, void *, int)) 		\
+				ssl_sw[3].ptr)((x),(y),(z))
+#define	SSL_write(x,y,z) (* (int (*)(SSL *, const void *,int))		\
+				ssl_sw[4].ptr)((x), (y), (z))
+#define	SSL_get_error(x,y)(* (int (*)(SSL *, int)) ssl_sw[5])((x), (y))
+#define	SSL_set_fd(x,y)	(* (int (*)(SSL *, SOCKET)) ssl_sw[6].ptr)((x), (y))
+#define	SSL_new(x)	(* (SSL * (*)(SSL_CTX *)) ssl_sw[7].ptr)(x)
+#define	SSL_CTX_new(x)	(* (SSL_CTX * (*)(SSL_METHOD *)) ssl_sw[8].ptr)(x)
+#define	SSLv23_server_method()	(* (SSL_METHOD * (*)(void)) ssl_sw[9].ptr)()
+#define	SSL_library_init() (* (int (*)(void)) ssl_sw[10].ptr)()
 #define	SSL_CTX_use_PrivateKey_file(x,y,z)	(* (int (*)(SSL_CTX *, \
-		const char *, int)) FUNC(11))((x), (y), (z))
+		const char *, int)) ssl_sw[11].ptr)((x), (y), (z))
 #define	SSL_CTX_use_certificate_file(x,y,z)	(* (int (*)(SSL_CTX *, \
-		const char *, int)) FUNC(12))((x), (y), (z))
+		const char *, int)) ssl_sw[12].ptr)((x), (y), (z))
 #define SSL_CTX_set_default_passwd_cb(x,y) \
-	(* (void (*)(SSL_CTX *, mg_spcb_t))FUNC(13))((x),(y))
-#define SSL_CTX_free(x) (* (void (*)(SSL_CTX *))FUNC(14))(x)
-#define CRYPTO_num_locks() (* (int (*)(void))FUNC(15))()
+	(* (void (*)(SSL_CTX *, mg_spcb_t)) ssl_sw[13].ptr)((x),(y))
+#define SSL_CTX_free(x) (* (void (*)(SSL_CTX *)) ssl_sw[14].ptr)(x)
+
+#define CRYPTO_num_locks() (* (int (*)(void)) crypto_sw[0].ptr)()
 #define CRYPTO_set_locking_callback(x)					\
-	(* (void (*)(void (*)(int, int, const char *, int)))FUNC(16))(x)
+		(* (void (*)(void (*)(int, int, const char *, int)))	\
+	 	crypto_sw[1].ptr)(x)
 #define CRYPTO_set_id_callback(x)					\
-	(* (void (*)(unsigned long (*)(void)))FUNC(17))(x)
+	(* (void (*)(unsigned long (*)(void))) crypto_sw[2].ptr)(x)
 
 static struct ssl_func	ssl_sw[] = {
 	{"SSL_free",			NULL},
@@ -263,6 +266,10 @@ static struct ssl_func	ssl_sw[] = {
 	{"SSL_CTX_use_certificate_file",NULL},
 	{"SSL_CTX_set_default_passwd_cb",NULL},
 	{"SSL_CTX_free",		NULL},
+	{NULL,				NULL}
+};
+
+static struct ssl_func	crypto_sw[] = {
 	{"CRYPTO_num_locks",		NULL},
 	{"CRYPTO_set_locking_callback",	NULL},
 	{"CRYPTO_set_id_callback",	NULL},
@@ -3400,37 +3407,31 @@ static unsigned long
 ssl_id_callback(void)
 {
 	return ((unsigned long) pthread_self());
-} 
+}
 
-/*
- * Dynamically load SSL library. Set up ctx->ssl_ctx pointer.
- */
 static bool_t
-set_ssl_option(struct mg_context *ctx, const char *pem)
+load_dll(const char *dll_name, struct ssl_func *sw)
 {
-	SSL_CTX		*CTX;
-	void		*lib;
 	union {void *p; void (*fp)(void);} u;
+	void		*dll_handle;
 	struct ssl_func	*fp;
-	int		i, size, retval = FALSE;
 
-	/* Load SSL library dynamically */
-	if ((lib = dlopen(SSL_LIB, RTLD_LAZY)) == NULL) {
-		cry(NULL, "%s: cannot load %s", __func__, SSL_LIB);
+	if ((dll_handle = dlopen(dll_name, RTLD_LAZY)) == NULL) {
+		cry(NULL, "%s: cannot load %s", __func__, dll_name);
 		return (FALSE);
 	}
 
-	for (fp = ssl_sw; fp->name != NULL; fp++) {
+	for (fp = sw; fp->name != NULL; fp++) {
 #ifdef _WIN32
 		/* GetProcAddress() returns pointer to function */
-		u.fp = (void (*)(void)) dlsym(lib, fp->name);
+		u.fp = (void (*)(void)) dlsym(dll_handle, fp->name);
 #else
 		/*
 		 * dlsym() on UNIX returns void *.
 		 * ISO C forbids casts of data pointers to function
 		 * pointers. We need to use a union to make a cast.
 		 */
-		u.p = dlsym(lib, fp->name);
+		u.p = dlsym(dll_handle, fp->name);
 #endif /* _WIN32 */
 		if (u.fp == NULL) {
 			cry(NULL, "%s: cannot find %s", __func__, fp->name);
@@ -3439,6 +3440,22 @@ set_ssl_option(struct mg_context *ctx, const char *pem)
 			fp->ptr = u.fp;
 		}
 	}
+
+	return (TRUE);
+}
+
+/*
+ * Dynamically load SSL library. Set up ctx->ssl_ctx pointer.
+ */
+static bool_t
+set_ssl_option(struct mg_context *ctx, const char *pem)
+{
+	SSL_CTX		*CTX;
+	int		i, size, retval = FALSE;
+
+	if (load_dll(SSL_LIB, ssl_sw) == FALSE ||
+	    load_dll(CRYPTO_LIB, crypto_sw) == FALSE)
+		return (FALSE);
 
 	/* Initialize SSL crap */
 	SSL_library_init();
