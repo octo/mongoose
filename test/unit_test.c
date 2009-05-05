@@ -68,11 +68,11 @@ test_make_path(void)
 #define	SLASH	"/"
 #endif
 	struct {char *uri, *aliases, *root, *result;} tests[] = {
-		{"/", "", "/", SLASH},
-		{"/xyz//", "/x=/y", "/", SLASH "yyz"},
-		{"/xyz//", "/x/=/y", "/", SLASH SLASH "xyz"},
-		{"/xyz//", "/x/=/y", "/boo", SLASH "boo" SLASH "xyz"},
-		{"/", "/x=/y", "/foo", SLASH "foo"},
+		{"/", "", "/", SLASH SLASH },
+		{"/xyz", "/x=/y", "/", SLASH "yyz"},
+		{"/xyz", "/x/=/y", "/", SLASH SLASH "xyz"},
+		{"/xyz", "/x/=/y", "/boo", SLASH "boo" SLASH "xyz"},
+		{"/", "/x=/y", "/foo", SLASH "foo" SLASH},
 		{"/x/y/z", "/a=/b,,/x=/y,/c=/d", "/foo",
 			SLASH "y" SLASH "y" SLASH "z"},
 		{NULL, NULL, NULL, NULL},
