@@ -306,6 +306,7 @@ enum mg_option_index {
 	OPT_AUTH_GPASSWD, OPT_AUTH_PUT, OPT_ACCESS_LOG, OPT_ERROR_LOG,
 	OPT_SSL_CERTIFICATE, OPT_ALIASES, OPT_ACL, OPT_UID, OPT_PROTECT,
 	OPT_SERVICE, OPT_HIDE, OPT_ADMIN_URI, OPT_MAX_THREADS, OPT_IDLE_TIME,
+	OPT_MIME_TYPES,
 	NUM_OPTIONS
 };
 
@@ -1538,61 +1539,94 @@ remove_double_dots(char *s)
 
 static const struct {
 	const char	*extension;
+	size_t		ext_len;
 	const char	*mime_type;
+	size_t		mime_type_len;
 } mime_types[] = {
-	{"html",	"text/html"			},
-	{"htm",		"text/html"			},
-	{"shtm",	"text/html"			},
-	{"shtml",	"text/html"			},
-	{"css",		"text/css"			},
-	{"js",		"application/x-javascript"	},
-	{"ico",		"image/x-icon"			},
-	{"gif",		"image/gif"			},
-	{"jpg",		"image/jpeg"			},
-	{"jpeg",	"image/jpeg"			},
-	{"png",		"image/png"			},
-	{"svg",		"image/svg+xml"			},
-	{"torrent",	"application/x-bittorrent"	},
-	{"wav",		"audio/x-wav"			},
-	{"mp3",		"audio/x-mp3"			},
-	{"mid",		"audio/mid"			},
-	{"m3u",		"audio/x-mpegurl"		},
-	{"ram",		"audio/x-pn-realaudio"		},
-	{"ra",		"audio/x-pn-realaudio"		},
-	{"doc",		"application/msword",		},
-	{"exe",		"application/octet-stream"	},
-	{"zip",		"application/x-zip-compressed"	},
-	{"xls",		"application/excel"		},
-	{"tgz",		"application/x-tar-gz"		},
-	{"tar",		"application/x-tar"		},
-	{"gz",		"application/x-gunzip"		},
-	{"arj",		"application/x-arj-compressed"	},
-	{"rar",		"application/x-arj-compressed"	},
-	{"rtf",		"application/rtf"		},
-	{"pdf",		"application/pdf"		},
-	{"swf",		"application/x-shockwave-flash"	},
-	{"mpg",		"video/mpeg"			},
-	{"mpeg",	"video/mpeg"			},
-	{"asf",		"video/x-ms-asf"		},
-	{"avi",		"video/x-msvideo"		},
-	{"bmp",		"image/bmp"			},
-	{NULL,		NULL				}
+	{".html",	5,	"text/html",			9},
+	{".htm",	4,	"text/html",			9},
+	{".shtm",	5,	"text/html",			9},
+	{".shtml",	6,	"text/html",			9},
+	{".css",	4,	"text/css",			8},
+	{".js",		3,	"application/x-javascript",	24},
+	{".ico",	4,	"image/x-icon",			12},
+	{".gif",	4,	"image/gif",			9},
+	{".jpg",	4,	"image/jpeg",			10},
+	{".jpeg",	5,	"image/jpeg",			10},
+	{".png",	4,	"image/png",			9},
+	{".svg",	4,	"image/svg+xml",		13},
+	{".torrent",	8,	"application/x-bittorrent",	24},
+	{".wav",	4,	"audio/x-wav",			11},
+	{".mp3",	4,	"audio/x-mp3",			11},
+	{".mid",	4,	"audio/mid",			9},
+	{".m3u",	4,	"audio/x-mpegurl",		15},
+	{".ram",	4,	"audio/x-pn-realaudio",		20},
+	{".ra",		3,	"audio/x-pn-realaudio",		20},
+	{".doc",	4,	"application/msword",		19},
+	{".exe",	4,	"application/octet-stream",	24},
+	{".zip",	4,	"application/x-zip-compressed",	28},
+	{".xls",	4,	"application/excel",		17},
+	{".tgz",	4,	"application/x-tar-gz",		20},
+	{".tar",	4,	"application/x-tar",		17},
+	{".gz",		3,	"application/x-gunzip",		20},
+	{".arj",	4,	"application/x-arj-compressed",	28},
+	{".rar",	4,	"application/x-arj-compressed",	28},
+	{".rtf",	4,	"application/rtf",		15},
+	{".pdf",	4,	"application/pdf",		15},
+	{".swf",	4,	"application/x-shockwave-flash",29},
+	{".mpg",	4,	"video/mpeg",			10},
+	{".mpeg",	5,	"video/mpeg",			10},
+	{".asf",	4,	"video/x-ms-asf",		14},
+	{".avi",	4,	"video/x-msvideo",		15},
+	{".bmp",	4,	"image/bmp",			9},
+	{NULL,		0,	NULL,				0}
 };
 
-static const char *
-get_mime_type(const char *path)
+static void
+get_mime_type(struct mg_context *ctx, const char *path,
+		const char **mime_type, int *mime_type_len)
 {
-	size_t		i;
-	const char	*ext;
+	size_t		path_len, len, i;
+	const char	*s, *p, *ext;
 
-	if ((ext = strrchr(path, '.')) != NULL) {
-		ext++;
-		for (i = 0; mime_types[i].extension != NULL; i++)
-			if (!mg_strcasecmp(ext, mime_types[i].extension))
-				return (mime_types[i].mime_type);
+	path_len = strlen(path);
+
+	/*
+	 * Scan user-defined mime types first, in case user wants to
+	 * override default mime types.
+	 */
+	lock_option(ctx, OPT_MIME_TYPES);
+	s = ctx->options[OPT_MIME_TYPES];
+	FOR_EACH_WORD_IN_LIST(s, len) {
+		p = (const char *) memchr(s, '=', len);
+		if (p == NULL || p >= s + len || p == s)
+			continue;
+
+		ext = path + (path_len - (p - s));
+
+		if (mg_strncasecmp(ext, s, p - s) == 0) {
+			*mime_type = p + 1;
+			*mime_type_len = len - (*mime_type - s);
+			unlock_option(ctx, OPT_MIME_TYPES);
+			return;
+		}
+	}
+	unlock_option(ctx, OPT_MIME_TYPES);
+
+	/* Now scan hardcoded mime types */
+	for (i = 0; mime_types[i].extension != NULL; i++) {
+		ext = path + (path_len - mime_types[i].ext_len);
+		if (path_len > mime_types[i].ext_len &&
+		    mg_strcasecmp(ext, mime_types[i].extension) == 0) {
+			*mime_type = mime_types[i].mime_type;
+			*mime_type_len = mime_types[i].mime_type_len;
+			return;
+		}
 	}
 
-	return ("text/plain");
+	/* Nothing found. Fall back to text/plain */
+	*mime_type = "text/plain";
+	*mime_type_len = 10;
 }
 
 #if !defined(NO_AUTH)
@@ -2298,9 +2332,9 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	const char	*mime_type, *s;
 	time_t		curtime = time(NULL);
 	unsigned long long cl, r1, r2;
-	int		fd, n;
+	int		fd, n, mime_type_len;
 
-	mime_type = get_mime_type(path);
+	get_mime_type(conn->ctx, path, &mime_type, &mime_type_len);
 	cl = stp->size;
 	conn->request_info.status_code = 200;
 	range[0] = '\0';
@@ -2339,12 +2373,13 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	    "Date: %s\r\n"
 	    "Last-Modified: %s\r\n"
 	    "Etag: \"%s\"\r\n"
-	    "Content-Type: %s\r\n"
+	    "Content-Type: %.*s\r\n"
 	    "Content-Length: %llu\r\n"
 	    "Connection: %s\r\n"
 	    "Accept-Ranges: bytes\r\n"
 	    "%s\r\n",
-	    conn->request_info.status_code, msg, date, lm, etag, mime_type, cl,
+	    conn->request_info.status_code, msg, date, lm, etag,
+	    mime_type_len, mime_type, cl,
 	    conn->keep_alive ? "keep-alive" : "close", range);
 
 	if (strcmp(conn->request_info.request_method, "HEAD") != 0)
@@ -3633,6 +3668,7 @@ static const struct mg_option known_options[] = {
 	{"acl", "\tAllow/deny IP addresses/subnets", NULL},
 	{"max_threads", "Maximum simultaneous threads to spawn", "100"},
 	{"idle_time", "Time in seconds connection stays idle", "10"},
+	{"mime_types", "Comma separated list of ext=mime_type pairs", NULL},
 	{NULL, NULL, NULL}
 };
 
@@ -3669,6 +3705,7 @@ static const struct option_setter {
 	{OPT_ACL,		&set_acl_option},
 	{OPT_MAX_THREADS,	&set_max_threads_option},
 	{OPT_IDLE_TIME,		NULL},
+	{OPT_MIME_TYPES,	NULL},
 	{-1,			NULL}
 };
 

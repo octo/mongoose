@@ -162,6 +162,7 @@ do_unit_test();
 # Spawn the server on port $port
 my $cmd = "$exe -ports $port -access_log access.log -error_log debug.log ".
 		"-cgi_env CGI_FOO=foo,CGI_BAR=bar,CGI_BAZ=baz " .
+		"-mime_types .bar=foo/bar,.tar.gz=blah,.baz=foo " .
 		"-root test -aliases $alias -admin_uri /hh";
 $cmd .= ' -cgi_interp perl' if on_windows();
 spawn($cmd);
@@ -217,6 +218,9 @@ my $mime_types = {
 	css => 'text/css',
 	jpg => 'image/jpeg',
 	c => 'text/plain',
+	'tar.gz' => 'blah',
+	bar => 'foo/bar',
+	baz => 'foo',
 };
 
 foreach my $key (keys %$mime_types) {
