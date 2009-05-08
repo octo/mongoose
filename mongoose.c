@@ -4192,7 +4192,6 @@ mg_start(void)
 
 	/* Start master (listening) thread */
 	start_thread(ctx, (mg_thread_func_t) master_thread, ctx);
-	cry(fc(ctx), "%s: ddd", "dsds");
 
 	return (ctx);
 }
