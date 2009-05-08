@@ -91,6 +91,10 @@ const struct mg_option *mg_get_option_list(void);
 const char *mg_get_option(struct mg_context *, const char *);
 int mg_set_option(struct mg_context *, const char *, const char *);
 
+/*
+ * User-defined callback function for URI handling, error handling,
+ * or logging server messages.
+ */
 typedef void (*mg_callback_t)(struct mg_connection *,
 		const struct mg_request_info *info, void *user_data);
 
@@ -100,6 +104,7 @@ void mg_bind_to_error_code(struct mg_context *ctx, int error_code,
 		mg_callback_t func, void *user_data);
 void mg_protect_uri(struct mg_context *ctx, const char *uri_regex,
 		mg_callback_t func, void *user_data);
+void mg_set_log_callback(struct mg_context *ctx, mg_callback_t func);
 
 /*
  * Needed only if SSL certificate asks for a password.

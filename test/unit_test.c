@@ -91,7 +91,7 @@ test_make_path(void)
 		fake_context.options[OPT_ALIASES] = tests[i].aliases;
 
 		/* Convert URI to the full file name */
-		make_path(&fake_context, tests[i].uri, buf, sizeof(buf));
+		make_path(fc(&fake_context), tests[i].uri, buf, sizeof(buf));
 
 		/* Fail if the result is not what we expect */
 		if (strcmp(buf, tests[i].result) != 0)
