@@ -9,6 +9,7 @@ EXPORTS
 	mg_bind_to_error_code
 	mg_protect_uri
 	mg_set_ssl_password_callback
+	mg_set_log_callback
 	mg_write
 	mg_printf
 	mg_get_header
