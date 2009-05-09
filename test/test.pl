@@ -244,7 +244,7 @@ my $range_request = "GET /hello.txt HTTP/1.1\nConnection: close\n".
 		"Range: bytes=3-5\r\n\r\n";
 o($range_request, '206 Partial Content', 'Range: 206 status code');
 o($range_request, 'Content-Length: 3\s', 'Range: Content-Length');
-o($range_request, 'Content-Range: bytes 3-5', 'Range: Content-Range');
+o($range_request, 'Content-Range: bytes 3-5/17', 'Range: Content-Range');
 o($range_request, '\nple$', 'Range: body content');
 
 # Test directory sorting. Sleep between file creation for 1.1 seconds,

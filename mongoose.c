@@ -2395,7 +2395,7 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 		cl = n == 2 ? r2 - r1 + 1: cl - r1;
 		(void) mg_snprintf(conn, range, sizeof(range),
 		    "Content-Range: bytes %llu-%llu/%llu\r\n",
-		    r1, r1 + cl - 1, cl);
+		    r1, r1 + cl - 1, (unsigned long long) stp->size);
 		msg = "Partial Content";
 	}
 
