@@ -98,7 +98,7 @@ class Connection(object):
 		if pointer:
 			# Make a copy and free() the returned pointer
 			var = '' + ctypes.c_char_p(pointer).value
-			self.m.dll.mg_free_var(pointer)
+			self.m.dll.mg_free(pointer)
 		return var
 
 	def printf(self, fmt, *args):

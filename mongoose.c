@@ -1357,7 +1357,7 @@ get_var(const char *name, const char *buf, size_t buf_len)
  * loading C runtime library and calling free().
  */
 void
-mg_free_var(char *data)
+mg_free(char *data)
 {
 	free(data);
 }

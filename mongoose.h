@@ -120,13 +120,13 @@ void mg_set_ssl_password_callback(struct mg_context *ctx, mg_spcb_t func);
  * mg_printf	Send data, using printf() semantics.
  * mg_get_header Helper function to get HTTP header value
  * mg_get_var	Helper function to get form variable value.
- *		NOTE: Returned value must be mg_free_var()-ed by the caller.
+ *		NOTE: Returned value must be mg_free()-ed by the caller.
  */
 int mg_write(struct mg_connection *, const void *buf, int len);
 int mg_printf(struct mg_connection *, const char *fmt, ...);
 const char *mg_get_header(const struct mg_connection *, const char *hdr_name);
 char *mg_get_var(const struct mg_connection *, const char *var_name);
-void mg_free_var(char *var);
+void mg_free(char *var);
 
 /*
  * General helper functions
