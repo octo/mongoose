@@ -79,10 +79,8 @@ struct mg_option {
  * mg_bind_to_error_code	Associate user function with HTTP error code.
  *			Passing 0 as error code binds function to all codes.
  *			Error code is passed as status_code in request info.
- * mg_protect_uri	Similar to "protect" option, but uses a user
- *			specified function instead of the passwords file.
- *			User specified function is usual callback, which
- *			does use its third argument to pass the result back.
+ * mg_protect_uri	Bind authorization function to the URI regexp.
+ * mg_set_log_callback	Set a function that will receive server log messages.
  */
 
 struct mg_context *mg_start(void);
@@ -121,10 +119,14 @@ void mg_set_ssl_password_callback(struct mg_context *ctx, mg_spcb_t func);
  * mg_get_header Helper function to get HTTP header value
  * mg_get_var	Helper function to get form variable value.
  *		NOTE: Returned value must be mg_free()-ed by the caller.
+ * mg_free	Free up memory returned by mg_get_var()
+ * mg_authorize	Set authorization flag for the connection. Should be used
+ *		only within callbacks registered with mg_protect_uri()
  */
 int mg_write(struct mg_connection *, const void *buf, int len);
 int mg_printf(struct mg_connection *, const char *fmt, ...);
 const char *mg_get_header(const struct mg_connection *, const char *hdr_name);
+void mg_authorize(struct mg_connection *);
 char *mg_get_var(const struct mg_connection *, const char *var_name);
 void mg_free(char *var);
 

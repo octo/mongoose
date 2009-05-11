@@ -372,6 +372,7 @@ struct mg_connection {
 	time_t		birth_time;	/* Time connection was accepted	*/
 	bool_t		free_post_data;	/* post_data was malloc-ed	*/
 	bool_t		keep_alive;	/* Keep-Alive flag		*/
+	bool_t		embedded_auth;	/* Used for authorization	*/
 	uint64_t	num_bytes_sent;	/* Total bytes sent to client	*/
 };
 
@@ -2118,7 +2119,6 @@ check_authorization(struct mg_connection *conn, const char *path)
 	size_t		len, n;
 	char		protected_path[FILENAME_MAX];
 	const char	*p, *s;
-	const struct callback *cb;
 	bool_t		authorized;
 
 	fp = NULL;
@@ -2154,19 +2154,6 @@ check_authorization(struct mg_connection *conn, const char *path)
 	if (fp != NULL) {
 		authorized = authorize(conn, fp);
 		(void) fclose(fp);
-	}
-
-	if ((cb = find_callback(conn->ctx, TRUE,
-	    conn->request_info.uri, -1)) != NULL) {
-		struct ah	ah;
-		char		buf[MAX_REQUEST_SIZE];
-		void		*user_data = cb->user_data;
-
-		authorized = FALSE;
-		if (parse_auth_header(conn, buf, sizeof(buf), &ah)) {
-			cb->func(conn, &conn->request_info, &user_data);
-			authorized = (bool_t) (long) user_data;
-		}
 	}
 
 	return (authorized);
@@ -3142,6 +3129,29 @@ send_ssi(struct mg_connection *conn, const char *path)
 }
 #endif /* !NO_SSI */
 
+void
+mg_authorize(struct mg_connection *conn)
+{
+	conn->embedded_auth = TRUE;
+}
+
+static bool_t
+check_embedded_authorization(struct mg_connection *conn)
+{
+	const struct callback	*cb;
+	bool_t			authorized;
+
+	authorized = TRUE;
+	cb = find_callback(conn->ctx, TRUE, conn->request_info.uri, -1);
+
+	if (cb != NULL) {
+		cb->func(conn, &conn->request_info, cb->user_data);
+		authorized = conn->embedded_auth;
+	}
+
+	return (authorized);
+}
+
 static void
 analyze_request(struct mg_connection *conn)
 {
@@ -3162,7 +3172,14 @@ analyze_request(struct mg_connection *conn)
 		send_authorization_request(conn);
 	} else
 #endif /* !NO_AUTH */
-	if ((cb = find_callback(conn->ctx, FALSE, uri, -1)) != NULL) {
+	if (check_embedded_authorization(conn) == FALSE) {
+		/*
+		 * Embedded code failed authorization. Do nothing here, since
+		 * an embedded code must handle this itself by either
+		 * showing proper error message, or redirecting to some
+		 * sort of login page, or something else.
+		 */
+	} else if ((cb = find_callback(conn->ctx, FALSE, uri, -1)) != NULL) {
 		if ((strcmp(ri->request_method, "POST") != 0 &&
 		    strcmp(ri->request_method, "PUT") != 0) ||
 		    handle_request_body(conn, -1))

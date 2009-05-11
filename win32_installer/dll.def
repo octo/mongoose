@@ -13,6 +13,7 @@ EXPORTS
 	mg_write
 	mg_printf
 	mg_get_header
+	mg_authorize
 	mg_get_var
 	mg_free
 	mg_version
