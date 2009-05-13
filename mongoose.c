@@ -45,7 +45,7 @@
 #endif /* !__STDC_FORMAT_MACROS */
 #include <inttypes.h>		/* Used for 64-bit printf/scanf formats	*/
 
-#if defined(_WIN32)		/* Windows specific	*/
+#if defined(_WIN32)		/* Windows specific #includes and #defines */
 #include <windows.h>
 
 #ifndef _WIN32_WCE
@@ -255,6 +255,12 @@ struct ssl_func {
 #define CRYPTO_set_id_callback(x)					\
 	(* (void (*)(unsigned long (*)(void))) crypto_sw[2].ptr)(x)
 
+/*
+ * set_ssl_option() function when called, updates this array.
+ * It loads SSL library dynamically and changes NULLs to the actual addresses
+ * of respective functions. The macros above (like SSL_connect()) are really
+ * just calling these functions indirectly via the pointer.
+ */
 static struct ssl_func	ssl_sw[] = {
 	{"SSL_free",			NULL},
 	{"SSL_accept",			NULL},
@@ -274,6 +280,9 @@ static struct ssl_func	ssl_sw[] = {
 	{NULL,				NULL}
 };
 
+/*
+ * Similar array as ssl_sw. These functions are located in different lib.
+ */
 static struct ssl_func	crypto_sw[] = {
 	{"CRYPTO_num_locks",		NULL},
 	{"CRYPTO_set_locking_callback",	NULL},
@@ -358,7 +367,7 @@ struct mg_context {
 
 	int		max_threads;	/* Maximum number of threads	*/
 	int		num_threads;	/* Number of active threads	*/
-	pthread_mutex_t	thr_mutex;
+	pthread_mutex_t	thr_mutex;	/* Protects (max|num)_threads	*/
 	pthread_cond_t	thr_cond;
 
 	mg_spcb_t	ssl_password_callback;
@@ -423,6 +432,12 @@ fc(struct mg_context *ctx)
 	return (&fake_connection);
 }
 
+/*
+ * If an embedded code does not intercept logging by calling
+ * mg_set_log_callback(), this function is used for logging. It prints
+ * stuff to the conn->error_log, which is stderr unless "error_log"
+ * option was set.
+ */
 static void
 builtin_error_log(struct mg_connection *conn,
 		const struct mg_request_info *request_info, void *message)
@@ -638,6 +653,10 @@ match_extension(const char *path, const char *ext_list)
 }
 #endif /* !(NO_CGI && NO_SSI) */
 
+/*
+ * Return TRUE if "uri" matches "regexp".
+ * '*' in the regexp means zero or more characters.
+ */
 static bool_t
 match_regex(const char *uri, const char *regexp)
 {
@@ -675,13 +694,17 @@ find_callback(const struct mg_context *ctx, bool_t is_auth,
 	return (NULL);
 }
 
+/*
+ * For use by external application. This sets custom logging function.
+ */
 void
 mg_set_log_callback(struct mg_context *ctx, mg_callback_t log_callback)
 {
+	/* If NULL is specified as a callback, revert back to the default */
 	if (log_callback == NULL)
-		log_callback = &builtin_error_log;
-
-	ctx->log_callback = log_callback;
+		ctx->log_callback = &builtin_error_log;
+	else
+		ctx->log_callback = log_callback;
 }
 
 static bool_t
@@ -696,7 +719,7 @@ does_client_want_keep_alive(const struct mg_connection *conn)
 }
 
 /*
- * Send error message back to a client.
+ * Send error message back to the client.
  */
 static void
 send_error(struct mg_connection *conn, int status, const char *reason,
@@ -801,6 +824,9 @@ pthread_self(void)
 	return ((pthread_t) GetCurrentThread());
 }
 
+/*
+ * Change all slashes to backslashes. It is Windows.
+ */
 static void
 fix_directory_separators(char *path)
 {
@@ -817,6 +843,10 @@ fix_directory_separators(char *path)
 	}
 }
 
+/*
+ * Encode 'path' which is assumed UTF-8 string, into UNICODE string.
+ * wbuf and wbuf_len is a target buffer and its length.
+ */
 static void
 to_unicode(const char *path, wchar_t *wbuf, size_t wbuf_len)
 {
@@ -886,6 +916,9 @@ mg_remove(const char *path)
 	return (_wremove(wbuf));
 }
 
+/*
+ * Implementation of POSIX opendir/closedir/readdir for Windows.
+ */
 static DIR *
 opendir(const char *name)
 {
@@ -1482,7 +1515,10 @@ mg_open_listening_port(const char *str)
 }
 
 /*
- * Check whether full request is buffered Return headers length, or 0
+ * Check whether full request is buffered. Return:
+ *   -1         if request is malformed
+ *    0         if request is not yet fully buffered
+ *   >0         actual request length, including last \r\n\r\n
  */
 static int
 get_request_len(const char *buf, size_t buflen)
@@ -1567,6 +1603,9 @@ date_to_epoch(const char *s)
 	return (mktime(&tm));
 }
 
+/*
+ * Protect against directory disclosure attack by removing '..'
+ */
 static void
 remove_double_dots(char *s)
 {
@@ -1581,6 +1620,9 @@ remove_double_dots(char *s)
 	*p = '\0';
 }
 
+/*
+ * Built-in mime types
+ */
 static const struct {
 	const char	*extension;
 	size_t		ext_len;
@@ -1657,7 +1699,7 @@ get_mime_type(struct mg_context *ctx, const char *path,
 	}
 	unlock_option(ctx, OPT_MIME_TYPES);
 
-	/* Now scan hardcoded mime types */
+	/* Now scan built-in mime types */
 	for (i = 0; mime_types[i].extension != NULL; i++) {
 		ext = path + (path_len - mime_types[i].ext_len);
 		if (path_len > mime_types[i].ext_len &&
@@ -2023,6 +2065,9 @@ open_auth_file(struct mg_connection *conn, const char *path)
 	return (fp);
 }
 
+/*
+ * Parsed Authorization: header
+ */
 struct ah {
 	char	*user, *uri, *cnonce, *response, *qop, *nc, *nonce;
 };
@@ -2196,6 +2241,10 @@ struct de {
 	struct mgstat		st;
 };
 
+/*
+ * This function is called from send_directory() and prints out
+ * single directory entry.
+ */
 static void
 print_dir_entry(struct de *de)
 {
@@ -2227,6 +2276,10 @@ print_dir_entry(struct de *de)
 	    de->st.is_directory ? "/" : "", mod, size);
 }
 
+/*
+ * This function is called from send_directory() and used for
+ * sorting direcotory entries by size, or name, or modification time.
+ */
 static int
 compare_dir_entries(const void *p1, const void *p2)
 {
@@ -2254,6 +2307,9 @@ compare_dir_entries(const void *p1, const void *p2)
 	return (query_string[1] == 'd' ? -cmp_result : cmp_result);
 }
 
+/*
+ * Send directory contents.
+ */
 static void
 send_directory(struct mg_connection *conn, const char *dir)
 {
@@ -2356,6 +2412,9 @@ send_opened_file_stream(struct mg_connection *conn, int fd, uint64_t len)
 	}
 }
 
+/*
+ * Send regular file contents.
+ */
 static void
 send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 {
@@ -2421,6 +2480,10 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	(void) close(fd);
 }
 
+/*
+ * Parse HTTP headers from the given buffer, advance buffer to the point
+ * where parsing stopped.
+ */
 static void
 parse_http_headers(char **buf, struct mg_request_info *ri)
 {
@@ -2445,6 +2508,9 @@ is_known_http_method(const char *method)
 	    !strcmp(method, "DELETE"));
 }
 
+/*
+ * Parse HTTP request, fill in mg_request_info structure.
+ */
 static bool_t
 parse_http_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
 {
@@ -2470,6 +2536,13 @@ parse_http_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
 	return (success_code);
 }
 
+/*
+ * Keep reading the input (either opened file descriptor fd, or socket sock,
+ * or SSL descriptor ssl) into buffer buf, until \r\n\r\n appears in the
+ * buffer (which marks the end of HTTP request). Buffer buf may already
+ * have some data. The length of the data is stored in nread.
+ * Upon every read operation, increase nread by the number of bytes read.
+ */
 static int
 read_request(int fd, SOCKET sock, SSL *ssl, char *buf, int bufsiz, int *nread)
 {
@@ -2526,6 +2599,9 @@ substitute_index_file(struct mg_connection *conn,
 	return (found);
 }
 
+/*
+ * Internal function, that is called by mg_bind_to_uri(),
+ */
 static void
 mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
 		mg_callback_t func, bool_t is_auth, void *user_data)
@@ -2574,8 +2650,11 @@ mg_protect_uri(struct mg_context *ctx, const char *uri_regex,
 	mg_bind(ctx, uri_regex, -1, func, TRUE, user_data);
 }
 
-static int
-not_modified(const struct mg_connection *conn, const struct mgstat *stp)
+/*
+ * Return True if we should reply 304 Not Modified.
+ */
+static bool_t
+is_not_modified(const struct mg_connection *conn, const struct mgstat *stp)
 {
 	const char *ims = mg_get_header(conn, "If-Modified-Since");
 	return (ims != NULL && stp->mtime < date_to_epoch(ims));
@@ -3159,6 +3238,12 @@ check_embedded_authorization(struct mg_connection *conn)
 	return (authorized);
 }
 
+/*
+ * This is the heart of the Mongoose's logic.
+ * This function is called when the request is read, parsed and validated,
+ * and Mongoose must decide what action to take: serve a file, or
+ * a directory, or call embedded function, etcetera.
+ */
 static void
 analyze_request(struct mg_connection *conn)
 {
@@ -3241,7 +3326,7 @@ analyze_request(struct mg_connection *conn)
 	    conn->ctx->options[OPT_SSI_EXTENSIONS])) {
 		send_ssi(conn, path);
 #endif /* NO_SSI */
-	} else if (not_modified(conn, &st)) {
+	} else if (is_not_modified(conn, &st)) {
 		send_error(conn, 304, "Not Modified", "");
 	} else {
 		send_file(conn, path, &st);
