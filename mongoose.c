@@ -926,7 +926,7 @@ opendir(const char *name)
 	} else if ((dir = (DIR *) malloc(sizeof(*dir))) == NULL) {
 		errno = ENOMEM;
 	} else {
-		(void) vsnprintf(conn, path, sizeof(path), "%s/*", name);
+		(void) snprintf(path, sizeof(path), "%s/*", name);
 		to_unicode(path, wpath, ARRAY_SIZE(wpath));
 		dir->handle = FindFirstFileW(wpath, &dir->info);
 
@@ -985,6 +985,7 @@ readdir(DIR *dir)
 static int
 start_thread(struct mg_context *ctx, void * (*func)(void *), void *param)
 {
+	ctx = NULL;
 	return (_beginthread((void (__cdecl *)( void *))func, 0, param) == 0);
 }
 
@@ -1026,7 +1027,7 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	interp = conn->ctx->options[OPT_CGI_INTERPRETER];
 	if (interp == NULL) {
 		line[2] = '\0';
-		(void) mg_snprintf(cmdline, sizeof(cmdline), "%s%c%s",
+		(void) mg_snprintf(conn, cmdline, sizeof(cmdline), "%s%c%s",
 		    dir, DIRSEP, prog);
 		if ((fp = fopen(cmdline, "r")) != NULL) {
 			(void) fgets(line, sizeof(line), fp);
@@ -1044,10 +1045,10 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	if ((p = (char *) strrchr(prog, '/')) != NULL)
 		prog = p + 1;
 
-	(void) mg_snprintf(cmdline, sizeof(cmdline), "%s%s%s",
+	(void) mg_snprintf(conn, cmdline, sizeof(cmdline), "%s%s%s",
 	    interp, interp[0] == '\0' ? "" : " ", prog);
 
-	(void) mg_snprintf(line, sizeof(line), "%s", dir);
+	(void) mg_snprintf(conn, line, sizeof(line), "%s", dir);
 	fix_directory_separators(line);
 
 	DEBUG_TRACE("%s: Running [%s]", __func__, cmdline);
