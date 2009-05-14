@@ -40,11 +40,6 @@
 #include <stddef.h>
 #include <stdio.h>
 
-#if !defined(__STDC_FORMAT_MACROS)
-#define	__STDC_FORMAT_MACROS	/* Allow formats macros in C++ too	*/
-#endif /* !__STDC_FORMAT_MACROS */
-#include <inttypes.h>		/* Used for 64-bit printf/scanf formats	*/
-
 #if defined(_WIN32)		/* Windows specific #includes and #defines */
 #include <windows.h>
 
@@ -2422,7 +2417,7 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	const char	*fmt = "%a, %d %b %Y %H:%M:%S GMT", *msg = "OK";
 	const char	*mime_type, *s;
 	time_t		curtime = time(NULL);
-	uint64_t	cl, r1, r2;
+	unsigned long long	cl, r1, r2;
 	int		fd, n, mime_type_len;
 
 	get_mime_type(conn->ctx, path, &mime_type, &mime_type_len);
@@ -2440,15 +2435,14 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	/* If Range: header specified, act accordingly */
 	s = mg_get_header(conn, "Range");
 	r1 = r2 = 0;
-	if (s != NULL && (n = sscanf(s,
-	    "bytes=%" SCNu64 "-%" SCNu64, &r1, &r2)) > 0) {
+	if (s != NULL && (n = sscanf(s, "bytes=%llu-%llu", &r1, &r2)) > 0) {
 		conn->request_info.status_code = 206;
 		(void) lseek(fd, (long) r1, SEEK_SET);
 		cl = n == 2 ? r2 - r1 + 1: cl - r1;
 		(void) mg_snprintf(conn, range, sizeof(range),
 		    "Content-Range: bytes "
-		    "%" PRIu64 "-%" PRIu64 "/%" PRIu64 "\r\n",
-		    r1, r1 + cl - 1, stp->size);
+		    "%llu-%llu/%llu\r\n",
+		    r1, r1 + cl - 1, (unsigned long long) stp->size);
 		msg = "Partial Content";
 	}
 
@@ -2467,7 +2461,7 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	    "Last-Modified: %s\r\n"
 	    "Etag: \"%s\"\r\n"
 	    "Content-Type: %.*s\r\n"
-	    "Content-Length: %" PRIu64 "\r\n"
+	    "Content-Length: %llu\r\n"
 	    "Connection: %s\r\n"
 	    "Accept-Ranges: bytes\r\n"
 	    "%s\r\n",
@@ -3409,7 +3403,7 @@ log_access(const struct mg_connection *conn)
 	flockfile(conn->ctx->access_log);
 
 	(void) fprintf(conn->ctx->access_log,
-	    "%s - %s [%s %+05d] \"%s %s HTTP/%d.%d\" %d %" PRIu64,
+	    "%s - %s [%s %+05d] \"%s %s HTTP/%d.%d\" %d %llu",
 	    inet_ntoa(conn->client.usa.u.sin.sin_addr),
 	    ri->remote_user == NULL ? "-" : ri->remote_user,
 	    date, tz_offset,
@@ -3417,7 +3411,7 @@ log_access(const struct mg_connection *conn)
 	    ri->uri ? ri->uri : "-",
 	    ri->http_version_major, ri->http_version_minor,
 	    conn->request_info.status_code,
-	    conn->num_bytes_sent);
+	    (unsigned long long) conn->num_bytes_sent);
 	log_header(conn, "Referer", conn->ctx->access_log);
 	log_header(conn, "User-Agent", conn->ctx->access_log);
 	(void) fputc('\n', conn->ctx->access_log);
