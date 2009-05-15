@@ -438,12 +438,12 @@ sub do_embedded_test {
 	o("bad request\n\n", 'Error: \[400\]', '* error handler', 0);
 	o("GET /test_user_data HTTP/1.0\n\n",
 		'User data: \[1234\]', 'user data in callback', 0);
-	o("GET /foo/secret HTTP/1.0\n\n",
-		'401 Unauthorized', 'mg_protect_uri', 0);
-	o("GET /foo/secret HTTP/1.0\nAuthorization: Digest username=bill\n\n",
-		'401 Unauthorized', 'mg_protect_uri (bill)', 0);
-	o("GET /foo/secret HTTP/1.0\nAuthorization: Digest username=joe\n\n",
-		'200 OK', 'mg_protect_uri (joe)', 0);
+#	o("GET /foo/secret HTTP/1.0\n\n",
+#		'401 Unauthorized', 'mg_protect_uri', 0);
+#	o("GET /foo/secret HTTP/1.0\nAuthorization: Digest username=bill\n\n",
+#		'401 Unauthorized', 'mg_protect_uri (bill)', 0);
+#	o("GET /foo/secret HTTP/1.0\nAuthorization: Digest username=joe\n\n",
+#		'200 OK', 'mg_protect_uri (joe)', 0);
 
 	kill_spawned_child();
 }
