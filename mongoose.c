@@ -2395,16 +2395,25 @@ static void
 send_opened_file_stream(struct mg_connection *conn, int fd, uint64_t len)
 {
 	char	buf[BUFSIZ];
-	int	n;
+	int	to_read, num_read, num_written;
 
 	while (len > 0) {
-		n = sizeof(buf);
-		if ((uint64_t) n > len)
-			n = (int) len;
-		if ((n = read(fd, buf, n)) <= 0)
+		/* Calculate how much to read from the file in the buffer */
+		to_read = sizeof(buf);
+		if ((uint64_t) to_read > len)
+			to_read = (int) len;
+
+		/* Read from file, exit the loop on error */
+		if ((num_read = read(fd, buf, to_read)) <= 0)
 			break;
-		conn->num_bytes_sent += mg_write(conn, buf, n);
-		len -= n;
+
+		/* Send read bytes to the client, exit the loop on error */
+		if ((num_written = mg_write(conn, buf, num_read)) != num_read)
+			break;
+
+		/* Both read and were successful, adjust counters */
+		conn->num_bytes_sent += num_written;
+		len -= num_written;
 	}
 }
 
