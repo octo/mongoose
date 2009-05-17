@@ -3,13 +3,16 @@ using System;
 public class Program {
 
 	// Mongoose object
-	public static Mongoose web_server = new Mongoose();
+	static private Mongoose web_server = new Mongoose();
 
-	// This function is called when user types in his browser
-	// http://127.0.0.1:8080/foo
-	static private void UriHandler(IntPtr conn, IntPtr ri, IntPtr data) {
+	// This function is called when user types in his browser http://127.0.0.1:8080/foo
+	static private void UriHandler(IntPtr conn, ref MongooseRequestInfo ri, IntPtr data) {
 		web_server.write(conn, "HTTP/1.1 200 OK\r\n\r\n");
-		web_server.write(conn, "Hello from C#!");
+		web_server.write(conn, "Hello from C#!\n");
+		web_server.write(conn, "HTTP headers we have received from the browser:\n");
+		for (int i = 0; i < ri.num_headers; i++) {
+			web_server.write(conn, ri.http_headers[i].name + ": " + ri.http_headers[i].value + "\n");
+		}
 	}
 	
 	static void Main() {
