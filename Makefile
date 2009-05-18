@@ -58,7 +58,7 @@ solaris:
 #WINDBG=	/Zi /DDEBUG /Od
 WINDBG=	/DNDEBUG /Os /Oi /GL /Gy
 WINOPT=	/MT /TC $(WINDBG) /nologo /W4 \
-	/D_CRT_SECURE_NO_WARNINGS /DHAVE_STRTOUI64 /D_WIN32_WINNT=0x0400
+	/D_CRT_SECURE_NO_WARNINGS /DHAVE_STRTOUI64
 windows:
 	cl $(WINOPT) mongoose.c /link /incremental:no /DLL \
 		/DEF:win32_installer\dll.def /out:_$(PROG).dll ws2_32.lib
