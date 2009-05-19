@@ -49,21 +49,10 @@ struct mg_request_info {
 	int	http_version_minor;
 	int	status_code;		/* HTTP status code	*/
 	int	num_headers;		/* Number of headers	*/
-#define	MAX_HTTP_HEADERS	64
 	struct mg_header {
 		char	*name;		/* HTTP header name	*/
 		char	*value;		/* HTTP header value	*/
-	} http_headers[MAX_HTTP_HEADERS];
-};
-
-/*
- * Mongoose configuration option.
- * Array of those is returned by mg_get_option_list().
- */
-struct mg_option {
-	char	*name;
-	char	*description;
-	char	*default_value;
+	} http_headers[64];		/* Maximum 64 headers	*/
 };
 
 /*
@@ -73,7 +62,7 @@ struct mg_option {
  * mg_stop		Stop server thread, and release the context.
  * mg_set_option	Set an option for the running context.
  * mg_get_option	Get an option for the running context.
- * mg_get_option_list	Get a list of all known options.
+ * mg_get_option_list	Get a list of all known options, subject to mg_free()
  * mg_bind_to_uri	Associate user function with paticular URI.
  *			'*' in regex matches zero or more characters.
  * mg_bind_to_error_code	Associate user function with HTTP error code.
@@ -85,7 +74,6 @@ struct mg_option {
 
 struct mg_context *mg_start(void);
 void mg_stop(struct mg_context *);
-const struct mg_option *mg_get_option_list(void);
 const char *mg_get_option(struct mg_context *, const char *);
 int mg_set_option(struct mg_context *, const char *, const char *);
 
@@ -138,6 +126,7 @@ void mg_free(char *var);
  *		Fills buf with stringified \0 terminated MD5 hash.
  */
 const char *mg_version(void);
+void mg_help(FILE *fp);
 void mg_md5(char *buf, ...);
 
 #ifdef __cplusplus

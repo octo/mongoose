@@ -307,6 +307,14 @@ struct mgstat {
 	time_t		mtime;		/* Modification time		*/
 };
 
+struct mg_option {
+	const char	*name;
+	const char	*description;
+	const char	*default_value;
+	int		index;
+	bool_t (*setter)(struct mg_context *, const char *);
+};
+
 /*
  * Numeric indexes for the option values in context, ctx->options
  */
@@ -1092,7 +1100,7 @@ mg_mkdir(const char *path, int mode)
 }
 
 static int
-set_non_blocking_mode(SOCKET sock)
+set_non_blocking_mode(struct mg_connection *conn, SOCKET sock)
 {
         unsigned long   on = 1;
 
@@ -1198,14 +1206,14 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 #endif /* !NO_CGI */
 
 static int
-set_non_blocking_mode(SOCKET sock)
+set_non_blocking_mode(struct mg_connection *conn, SOCKET sock)
 {
         int     flags, ok = -1;
 
         if ((flags = fcntl(sock, F_GETFL, 0)) == -1) {
-                cry(NULL, "%s: fcntl(F_GETFL): %d", __func__, ERRNO);
+                cry(conn, "%s: fcntl(F_GETFL): %d", __func__, ERRNO);
         } else if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) != 0) {
-                cry(NULL, "%s: fcntl(F_SETFL): %d", __func__, ERRNO);
+                cry(conn, "%s: fcntl(F_SETFL): %d", __func__, ERRNO);
         } else {
                 ok = 0;        /* Success */
         }
@@ -1218,14 +1226,14 @@ static void
 lock_option(struct mg_context *ctx, int opt_index)
 {
 	if (pthread_mutex_lock(&ctx->opt_mutex[opt_index]) != 0)
-		cry(NULL, "pthread_mutex_lock: %s", strerror(ERRNO));
+		cry(fc(ctx), "pthread_mutex_lock: %s", strerror(ERRNO));
 }
 
 static void
 unlock_option(struct mg_context *ctx, int opt_index)
 {
 	if (pthread_mutex_unlock(&ctx->opt_mutex[opt_index]) != 0)
-		cry(NULL, "pthread_mutex_unlock: %s", strerror(ERRNO));
+		cry(fc(ctx), "pthread_mutex_unlock: %s", strerror(ERRNO));
 }
 
 /*
@@ -1469,7 +1477,7 @@ make_path(struct mg_connection *conn, const char *uri,
  * Address format: [local_ip_address:]port_number
  */
 static SOCKET
-mg_open_listening_port(const char *str)
+mg_open_listening_port(struct mg_context *ctx, const char *str)
 {
 	SOCKET		sock;
 	int		on = 1, a, b, c, d, port;
@@ -1502,7 +1510,7 @@ mg_open_listening_port(const char *str)
 		set_close_on_exec(sock);
 	} else {
 		/* Error */
-		cry(NULL, "%s(%d): %s", __func__, port, strerror(errno));
+		cry(fc(ctx), "%s(%d): %s", __func__, port, strerror(errno));
 		if (sock != INVALID_SOCKET)
 			(void) closesocket(sock);
 		sock = INVALID_SOCKET;
@@ -2031,7 +2039,7 @@ open_auth_file(struct mg_connection *conn, const char *path)
 	if (ctx->options[OPT_AUTH_GPASSWD] != NULL) {
 		/* Use global passwords file */
 		if ((fp = fopen(ctx->options[OPT_AUTH_GPASSWD], "r")) == NULL)
-			cry(NULL, "fopen(%s): %s",
+			cry(fc(ctx), "fopen(%s): %s",
 			    ctx->options[OPT_AUTH_GPASSWD], strerror(ERRNO));
 	} else if (!mg_stat(path, &st) && st.is_directory) {
 		(void) mg_snprintf(conn, name, sizeof(name), "%s%c%s",
@@ -2494,7 +2502,7 @@ parse_http_headers(char **buf, struct mg_request_info *ri)
 {
 	int	i;
 
-	for (i = 0; i < MAX_HTTP_HEADERS; i++) {
+	for (i = 0; i < (int) ARRAY_SIZE(ri->http_headers); i++) {
 		ri->http_headers[i].name = skip(buf, ": ");
 		ri->http_headers[i].value = skip(buf, "\r\n");
 		if (ri->http_headers[i].name[0] == '\0')
@@ -2614,7 +2622,7 @@ mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
 	struct callback	*cb;
 
 	if (ctx->num_callbacks >= (int) ARRAY_SIZE(ctx->callbacks) - 1) {
-		cry(NULL, "Too many callbacks! Increase MAX_CALLBACKS.");
+		cry(fc(ctx), "Too many callbacks! Increase MAX_CALLBACKS.");
 	} else {
 		cb = &ctx->callbacks[ctx->num_callbacks];
 		cb->uri_regex = uri_regex ? mg_strdup(uri_regex) : NULL;
@@ -3366,7 +3374,7 @@ set_ports_option(struct mg_context *ctx, const char *p)
 		    (int) (ARRAY_SIZE(ctx->listeners) - 1)) {
 			cry(fc(ctx), "%s", "Too many listeninig sockets");
 			return (FALSE);
-		} else if ((sock = mg_open_listening_port(p)) ==
+		} else if ((sock = mg_open_listening_port(ctx, p)) ==
 		    INVALID_SOCKET) {
 			cry(fc(ctx), "cannot bind to %.*s", len, p);
 			return (FALSE);
@@ -3725,66 +3733,6 @@ set_max_threads_option(struct mg_context *ctx, const char *str)
 	return (TRUE);
 }
 
-static void
-admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
-		void *user_data)
-{
-	const struct mg_option	*list;
-	const char		*option_name, *option_value;
-	int			i;
-
-	user_data = NULL; /* Unused */
-
-	(void) mg_printf(conn,
-	    "HTTP/1.1 200 OK\r\n"
-	    "Content-Type: text/html\r\n\r\n"
-	    "<html><body><h1>Mongoose v. %s</h1>", mg_version());
-
-	if (!strcmp(ri->request_method, "POST")) {
-		option_name = mg_get_var(conn, "o");
-		option_value = mg_get_var(conn, "v");
-		if (mg_set_option(conn->ctx,
-		    option_name, option_value) == -1) {
-			(void) mg_printf(conn,
-			    "<p style=\"background: red\">Error setting "
-			    "option \"%s\"</p>",
-			    option_name ? option_name : "(null)");
-		} else {
-			(void) mg_printf(conn,
-			    "<p style=\"color: green\">Saved: %s=%s</p>",
-			    option_name, option_value ? option_value : "NULL");
-		}
-	}
-
-	/* Print table with all options */
-	list = mg_get_option_list();
-	(void) mg_printf(conn, "%s", "<table border=\"1\""
-	    "<tr><th>Option</th><th>Description</th>"
-	    "<th colspan=2>Value</th></tr>");
-
-	for (i = 0; list[i].name != NULL; i++) {
-		option_value = mg_get_option(conn->ctx, list[i].name);
-		if (option_value == NULL)
-			option_value = "";
-		(void) mg_printf(conn,
-		    "<form method=post><tr><td>%s</td><td>%s</td>"
-		    "<input type=hidden name=o value='%s'>"
-		    "<td><input type=text name=v value='%s'></td>"
-		    "<td><input type=submit value=save></td></form></tr>",
-		    list[i].name, list[i].description, list[i].name,
-		    option_value);
-	}
-
-	(void) mg_printf(conn, "%s", "</table></body></html>");
-}
-
-static bool_t
-set_admin_uri_option(struct mg_context *ctx, const char *uri)
-{
-	mg_bind_to_uri(ctx, uri, &admin_page, NULL);
-	return (TRUE);
-}
-
 static bool_t
 set_acl_option(struct mg_context *ctx, const char *acl)
 {
@@ -3793,75 +3741,58 @@ set_acl_option(struct mg_context *ctx, const char *acl)
 	return (check_acl(ctx, acl, &fake) != -1);
 }
 
-static const struct mg_option known_options[] = {
-	{"root", "\tWeb root directory", NULL},
-	{"index_files",	"Index files", "index.html,index.htm,index.cgi"},
-#if !defined(NO_SSL)
-	{"ssl_cert", "SSL certificate file", NULL},
-#endif /* !NO_SSL */
-	{"ports", "Listening ports", NULL},
-	{"dir_list", "Directory listing", "yes"},
-	{"protect", "URI to htpasswd mapping", NULL},
-#if !defined(NO_CGI)
-	{"cgi_ext", "CGI extensions", "cgi,pl,php"},
-	{"cgi_interp", "CGI interpreter to use with all CGI scripts", NULL},
-	{"cgi_env", "Custom CGI enviroment variables", NULL},
-#endif /* NO_CGI */
-	{"ssi_ext", "SSI extensions", "shtml,shtm"},
-#if !defined(NO_AUTH)
-	{"auth_realm", "Authentication domain name", "mydomain.com"},
-	{"auth_gpass", "Global passwords file", NULL},
-	{"auth_PUT", "PUT,DELETE auth file", NULL},
-#endif /* !NO_AUTH */
-#if !defined(_WIN32)
-	{"uid", "\tRun as user", NULL},
-#endif /* !_WIN32 */
-	{"access_log", "Access log file", NULL},
-	{"error_log", "Error log file", NULL},
-	{"aliases", "Path=URI mappings", NULL},
-	{"admin_uri", "Administration page URI", NULL},
-	{"acl", "\tAllow/deny IP addresses/subnets", NULL},
-	{"max_threads", "Maximum simultaneous threads to spawn", "100"},
-	{"idle_time", "Time in seconds connection stays idle", "10"},
-	{"mime_types", "Comma separated list of ext=mime_type pairs", NULL},
-	{NULL, NULL, NULL}
-};
+static void admin_page(struct mg_connection *,
+		const struct mg_request_info *, void *);
+static bool_t
+set_admin_uri_option(struct mg_context *ctx, const char *uri)
+{
+	mg_bind_to_uri(ctx, uri, &admin_page, NULL);
+	return (TRUE);
+}
 
-static const struct option_setter {
-	int	context_index;
-	bool_t (*setter)(struct mg_context *, const char *);
-} setters[] = {
-	{OPT_ROOT,		NULL},
-	{OPT_INDEX_FILES,	NULL},
+static const struct mg_option known_options[] = {
+	{"root", "\tWeb root directory", NULL, OPT_ROOT, NULL},
+	{"index_files",	"Index files", "index.html,index.htm,index.cgi",
+		OPT_INDEX_FILES, NULL},
 #if !defined(NO_SSL)
-	{OPT_SSL_CERTIFICATE,	&set_ssl_option},
+	{"ssl_cert", "SSL certificate file", NULL,
+		OPT_SSL_CERTIFICATE, &set_ssl_option},
 #endif /* !NO_SSL */
-	{OPT_PORTS,		&set_ports_option},
-	{OPT_DIR_LIST,		NULL},
-	{OPT_PROTECT,		NULL},
+	{"ports", "Listening ports", NULL, OPT_PORTS, &set_ports_option},
+	{"dir_list", "Directory listing", "yes", OPT_DIR_LIST, NULL},
+	{"protect", "URI to htpasswd mapping", NULL, OPT_PROTECT, NULL},
 #if !defined(NO_CGI)
-	{OPT_CGI_EXTENSIONS,	NULL},
-	{OPT_CGI_INTERPRETER,	NULL},
-	{OPT_CGI_ENV,		NULL},
+	{"cgi_ext", "CGI extensions", "cgi,pl,php", OPT_CGI_EXTENSIONS, NULL},
+	{"cgi_interp", "CGI interpreter to use with all CGI scripts", NULL,
+		OPT_CGI_INTERPRETER, NULL},
+	{"cgi_env", "Custom CGI enviroment variables", NULL, OPT_CGI_ENV, NULL},
 #endif /* NO_CGI */
-	{OPT_SSI_EXTENSIONS,	NULL},
+	{"ssi_ext", "SSI extensions", "shtml,shtm", OPT_SSI_EXTENSIONS, NULL},
 #if !defined(NO_AUTH)
-	{OPT_AUTH_DOMAIN,	NULL},
-	{OPT_AUTH_GPASSWD,	&set_gpass_option},
-	{OPT_AUTH_PUT,		NULL},
+	{"auth_realm", "Authentication domain name", "mydomain.com",
+		OPT_AUTH_DOMAIN, NULL},
+	{"auth_gpass", "Global passwords file", NULL,
+		OPT_AUTH_GPASSWD, &set_gpass_option},
+	{"auth_PUT", "PUT,DELETE auth file", NULL, OPT_AUTH_PUT, NULL},
 #endif /* !NO_AUTH */
 #if !defined(_WIN32)
-	{OPT_UID,		&set_uid_option},
+	{"uid", "\tRun as user", NULL, OPT_UID, &set_uid_option},
 #endif /* !_WIN32 */
-	{OPT_ACCESS_LOG,	&set_alog_option},
-	{OPT_ERROR_LOG,		&set_elog_option},
-	{OPT_ALIASES,		NULL},
-	{OPT_ADMIN_URI,		&set_admin_uri_option},
-	{OPT_ACL,		&set_acl_option},
-	{OPT_MAX_THREADS,	&set_max_threads_option},
-	{OPT_IDLE_TIME,		NULL},
-	{OPT_MIME_TYPES,	NULL},
-	{-1,			NULL}
+	{"access_log", "Access log file", NULL,
+		OPT_ACCESS_LOG, &set_alog_option},
+	{"error_log", "Error log file", NULL, OPT_ERROR_LOG, &set_elog_option},
+	{"aliases", "Path=URI mappings", NULL, OPT_ALIASES, NULL},
+	{"admin_uri", "Administration page URI", NULL,
+		OPT_ADMIN_URI, &set_admin_uri_option},
+	{"acl", "\tAllow/deny IP addresses/subnets", NULL,
+		OPT_ACL, &set_acl_option},
+	{"max_threads", "Maximum simultaneous threads to spawn", "100",
+		OPT_MAX_THREADS, &set_max_threads_option},
+	{"idle_time", "Time in seconds connection stays idle", "10",
+		OPT_IDLE_TIME, NULL},
+	{"mime_types", "Comma separated list of ext=mime_type pairs", NULL,
+		OPT_MIME_TYPES, NULL},
+	{NULL, NULL, NULL, 0, NULL}
 };
 
 static const struct mg_option *
@@ -3880,25 +3811,24 @@ int
 mg_set_option(struct mg_context *ctx, const char *opt, const char *val)
 {
 	const struct mg_option	*option;
-	int			i, ctx_index, retval;
+	int			i, retval;
 
 	DEBUG_TRACE("%s: [%s]->[%s]\n", __func__, opt, val);
 	if (opt != NULL && (option = find_opt(opt)) != NULL) {
 		i = (int) (option - known_options);
 		lock_option(ctx, i);
 
-		if (setters[i].setter != NULL)
-			retval = setters[i].setter(ctx, val);
+		if (option->setter != NULL)
+			retval = option->setter(ctx, val);
 		else
 			retval = TRUE;
 
 		/* Free old value if any */
-		ctx_index = setters[i].context_index;
-		if (ctx->options[ctx_index] != NULL)
-			free(ctx->options[ctx_index]);
+		if (ctx->options[option->index] != NULL)
+			free(ctx->options[option->index]);
 
 		/* Set new option value */
-		ctx->options[ctx_index] = val ? mg_strdup(val) : NULL;
+		ctx->options[option->index] = val ? mg_strdup(val) : NULL;
 		unlock_option(ctx, i);
 	} else {
 		retval = -1;
@@ -3907,23 +3837,87 @@ mg_set_option(struct mg_context *ctx, const char *opt, const char *val)
 	return (retval);
 }
 
-const struct mg_option *
-mg_get_option_list(void)
+void
+mg_help(FILE *fp)
 {
-	return (known_options);
+	const struct mg_option	*o;
+
+	(void) fprintf(stderr,
+	    "Mongoose version %s (c) Sergey Lyubka\n"
+	    "usage: mongoose [options] [config_file]\n", mg_version());
+
+#if !defined(NO_AUTH)
+	fprintf(fp, "  -A <htpasswd_file> <realm> <user> <passwd>\n");
+#endif /* NO_AUTH */
+
+	for (o = known_options; o->name != NULL; o++) {
+		(void) fprintf(fp, "  -%s\t%s", o->name, o->description);
+		if (o->default_value != NULL)
+			fprintf(fp, " (default: \"%s\")", o->default_value);
+		fputc('\n', fp);
+	}
 }
 
 const char *
 mg_get_option(struct mg_context *ctx, const char *option_name)
 {
-	const struct mg_option	*o;
-	const char			*value = NULL;
+	const struct mg_option	*option;
 
-	value = NULL;
-	if ((o = find_opt(option_name)) != NULL)
-		value = ctx->options[setters[o - known_options].context_index];
+	if ((option = find_opt(option_name)) != NULL)
+		return (ctx->options[option->index]);
+	else
+		return (NULL);
+}
 
-	return (value);
+static void
+admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
+			   void *user_data)
+{
+	const struct mg_option	*option;
+	const char		*option_name, *option_value;
+
+	user_data = NULL; /* Unused */
+
+	(void) mg_printf(conn,
+	"HTTP/1.1 200 OK\r\n"
+			"Content-Type: text/html\r\n\r\n"
+			"<html><body><h1>Mongoose v. %s</h1>", mg_version());
+
+	if (!strcmp(ri->request_method, "POST")) {
+		option_name = mg_get_var(conn, "o");
+		option_value = mg_get_var(conn, "v");
+		if (mg_set_option(conn->ctx,
+		    option_name, option_value) == -1) {
+			    (void) mg_printf(conn,
+			    "<p style=\"background: red\">Error setting "
+					    "option \"%s\"</p>",
+			    option_name ? option_name : "(null)");
+		    } else {
+			    (void) mg_printf(conn,
+			    "<p style=\"color: green\">Saved: %s=%s</p>",
+			    option_name, option_value ? option_value : "NULL");
+		    }
+	}
+
+	/* Print table with all options */
+	(void) mg_printf(conn, "%s", "<table border=\"1\""
+			"<tr><th>Option</th><th>Description</th>"
+					"<th colspan=2>Value</th></tr>");
+
+	for (option = known_options; option->name != NULL; option++) {
+		option_value = mg_get_option(conn->ctx, option->name);
+		if (option_value == NULL)
+			option_value = "";
+		(void) mg_printf(conn,
+		    "<form method=post><tr><td>%s</td><td>%s</td>"
+		    "<input type=hidden name=o value='%s'>"
+		    "<td><input type=text name=v value='%s'></td>"
+		    "<td><input type=submit value=save></td></form></tr>",
+		    option->name, option->description,
+		    option->name, option_value);
+	}
+
+	(void) mg_printf(conn, "%s", "</table></body></html>");
 }
 
 static void
@@ -3936,14 +3930,14 @@ reset_per_request_attributes(struct mg_connection *conn)
 }
 
 static void
-close_socket_gracefully(SOCKET sock)
+close_socket_gracefully(struct mg_connection *conn, SOCKET sock)
 {
 	char	buf[BUFSIZ];
 	int	n;
 
 	/* Send FIN to the client */
 	(void) shutdown(sock, SHUT_WR);
-	set_non_blocking_mode(sock);
+	set_non_blocking_mode(conn, sock);
 
 	/*
 	 * Read and discard pending data. If we do not do that and close the
@@ -3967,7 +3961,7 @@ close_connection(struct mg_connection *conn)
 	if (conn->ssl)
 		SSL_free(conn->ssl);
 	if (conn->client.sock != INVALID_SOCKET) {
-		close_socket_gracefully(conn->client.sock);
+		close_socket_gracefully(conn, conn->client.sock);
 	}
 }
 
@@ -4241,6 +4235,7 @@ struct mg_context *
 mg_start(void)
 {
 	struct mg_context	*ctx;
+	const struct mg_option	*option;
 	char			web_root[FILENAME_MAX];
 	int			i;
 
@@ -4258,17 +4253,16 @@ mg_start(void)
 	mg_set_log_callback(ctx, builtin_error_log);
 
 	/* Initialize options. First pass: set default option values */
-	for (i = 0; known_options[i].name != NULL; i++)
-		ctx->options[setters[i].context_index] =
-			known_options[i].default_value  == NULL ?
-			NULL : mg_strdup(known_options[i].default_value);
+	for (option = known_options; option->name != NULL; option++)
+		ctx->options[option->index] = option->default_value == NULL ?
+			NULL : mg_strdup(option->default_value);
 
 	/* Call setter functions */
-	for (i = 0; known_options[i].name != NULL; i++)
-		if (setters[i].setter &&
-		    ctx->options[setters[i].context_index] != NULL)
-			if (setters[i].setter(ctx,
-			    ctx->options[setters[i].context_index]) == FALSE) {
+	for (option = known_options; option->name != NULL; option++)
+		if (option->setter != NULL &&
+		    ctx->options[option->index] != NULL)
+			if (option->setter(ctx,
+			    ctx->options[option->index]) == FALSE) {
 				mg_fini(ctx);
 				return (NULL);
 			}

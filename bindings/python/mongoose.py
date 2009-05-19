@@ -71,15 +71,6 @@ class mg_request_info(ctypes.Structure):
 	]
 
 
-class mg_option(ctypes.Structure):
-	"""A wrapper for struct mg_option."""
-	_fields_ = [
-		('name', ctypes.c_char_p),
-		('description', ctypes.c_char_p),
-		('default_value', ctypes.c_char_p),
-	]
-
-
 class Connection(object):
 	"""A wrapper class for all functions that take
 	struct mg_connection * as the first argument."""
@@ -168,11 +159,6 @@ class Mongoose(object):
 		self.callbacks.append(cb)
 
 		self.dll[func_name](self.ctx, what, cb, data)
-
-	def get_option_list(self):
-		"""Return list of all known options."""
-		val = self.dll.mg_get_option_list()
-		return ctypes.cast(val, ctypes.POINTER(mg_option))
 
 	def bind_to_uri(self, uri_regex, callback, data):
 		self._bind(uri_regex, callback, data, 'mg_bind_to_uri')

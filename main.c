@@ -71,25 +71,9 @@ signal_handler(int sig_num)
  * Show usage string and exit.
  */
 static void
-show_usage_and_exit(const char *prog)
+show_usage_and_exit(void)
 {
-	const struct mg_option	*o;
-
-	(void) fprintf(stderr,
-	    "Mongoose version %s (c) Sergey Lyubka\n"
-	    "usage: %s [options] [config_file]\n", mg_version(), prog);
-
-#if !defined(NO_AUTH)
-	fprintf(stderr, "  -A <htpasswd_file> <realm> <user> <passwd>\n");
-#endif /* NO_AUTH */
-
-	o = mg_get_option_list();
-	for (; o->name != NULL; o++) {
-		(void) fprintf(stderr, "  -%s\t%s", o->name, o->description);
-		if (o->default_value != NULL)
-			fprintf(stderr, " (default: \"%s\")", o->default_value);
-		fputc('\n', stderr);
-	}
+	mg_help(stderr);
 	exit(EXIT_FAILURE);
 }
 
@@ -154,40 +138,22 @@ mg_edit_passwords(const char *fname, const char *domain,
 #endif /* NO_AUTH */
 
 static void
-set_temporary_opt_value(const struct mg_option *opts, char **vals,
-		const char *name, const char *val)
-{
-	int	i;
-
-	for (i = 0; opts[i].name != NULL; i++)
-		if (!strcmp(opts[i].name, name)) {
-			if (vals[i] != NULL)
-				free(vals[i]);
-			vals[i] = strdup(val);
-			return;
-		}
-	(void) fprintf(stderr, "No such option: \"%s\"\n", name);
-	exit(EXIT_FAILURE);
-}
-
-static void
 process_command_line_arguments(struct mg_context *ctx, char *argv[])
 {
-	const struct mg_option *opts;
 	const char	*config_file = CONFIG_FILE;
-	char		line[BUFSIZ], opt[BUFSIZ], *vals[100],
-				val[BUFSIZ], path[FILENAME_MAX], *p;
+	char		line[512], opt[512], *vals[100],
+				val[512], path[FILENAME_MAX], *p;
 	FILE		*fp;
 	size_t		i, line_no = 0;
 
 	/* First find out, which config file to open */
 	for (i = 1; argv[i] != NULL && argv[i][0] == '-'; i += 2)
 		if (argv[i + 1] == NULL)
-			show_usage_and_exit(argv[0]);
+			show_usage_and_exit();
 
 	if (argv[i] != NULL && argv[i + 1] != NULL) {
 		/* More than one non-option arguments are given w*/
-		show_usage_and_exit(argv[0]);
+		show_usage_and_exit();
 	} else if (argv[i] != NULL) {
 		/* Just one non-option argument is given, this is config file */
 		config_file = argv[i];
@@ -211,7 +177,6 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 
 	/* Reset temporary value holders */
 	(void) memset(vals, 0, sizeof(vals));
-	opts = mg_get_option_list();
 
 	if (fp != NULL) {
 		(void) printf("Loading config file %s\n", config_file);
@@ -230,8 +195,7 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 				    config_file, (int) line_no);
 				exit(EXIT_FAILURE);
 			}
-
-			set_temporary_opt_value(opts, vals, opt, val);
+			mg_set_option(ctx, opt, val);
 		}
 
 		(void) fclose(fp);
@@ -239,19 +203,11 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 
 	/* Now pass through the command line options */
 	for (i = 1; argv[i] != NULL && argv[i][0] == '-'; i += 2)
-		set_temporary_opt_value(opts, vals, &argv[i][1], argv[i + 1]);
-
-	/* Finally, call option setters */
-	for (i = 0; opts[i].name != NULL; i++) {
-		if (vals[i] != NULL) {
-			if (mg_set_option(ctx, opts[i].name, vals[i]) != 1) {
-				(void) fprintf(stderr, "Error setting "
-				    "option \"%s\"\n", opts[i].name);
-				exit(EXIT_FAILURE);
-			}
-			free(vals[i]);
+		if (mg_set_option(ctx, &argv[i][1], argv[i + 1]) != 1) {
+			(void) fprintf(stderr, "Error setting "
+			    "option \"%s\"\n", &argv[i][1]);
+			exit(EXIT_FAILURE);
 		}
-	}
 }
 
 #ifdef _WIN32
@@ -325,13 +281,13 @@ main(int argc, char *argv[])
 #if !defined(NO_AUTH)
 	if (argc > 1 && argv[1][0] == '-' && argv[1][1] == 'A') {
 		if (argc != 6)
-			show_usage_and_exit(argv[0]);
+			show_usage_and_exit();
 		exit(mg_edit_passwords(argv[2], argv[3], argv[4],argv[5]));
 	}
 #endif /* NO_AUTH */
 
 	if (argc == 2 && (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")))
-		show_usage_and_exit(argv[0]);
+		show_usage_and_exit();
 
 #if defined(_WIN32)
 	(void) sprintf(service_name, "Mongoose %s", mg_version());
@@ -356,9 +312,9 @@ main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 
 	printf("Mongoose %s started on port(s) [%s], serving directory [%s]\n",
-			mg_version(),
-			mg_get_option(ctx, "ports"),
-			mg_get_option(ctx, "root"));
+	    mg_version(),
+	    mg_get_option(ctx, "ports"),
+	    mg_get_option(ctx, "root"));
 	fflush(stdout);
 	while (exit_flag == 0)
 		sleep(1);
