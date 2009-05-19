@@ -1,10 +1,10 @@
 using System;
 using System.Runtime.InteropServices;
 
-// This is "struct mg_header" from mongoose.h header file
+
 [StructLayout(LayoutKind.Sequential)] public struct MongooseHeader {
-	public string	name;
-	public string	value;
+	public IntPtr	name;		// Using IntPtr here because if we use strings here,
+	public IntPtr	value;		// it won't be properly marshalled.
 };
 
 // This is "struct mg_request_info" from mongoose.h header file
@@ -24,7 +24,10 @@ using System.Runtime.InteropServices;
 };
 
 // This is a delegate for mg_callback_t from mongoose.h header file
-public delegate void MongooseCallback(IntPtr conn, ref MongooseRequestInfo ri, IntPtr user_data);
+public delegate void MongooseCallback2(IntPtr conn, ref MongooseRequestInfo ri, IntPtr user_data);
+
+// This is a delegate to be used by the application
+public delegate void MongooseCallback(MongooseConnection conn, MongooseRequestInfo ri);
 
 public class Mongoose {
 	public string version;
@@ -35,11 +38,6 @@ public class Mongoose {
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern string	mg_version();
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern int	mg_set_option(IntPtr ctx, string name, string value);
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern string	mg_get_option(IntPtr ctx, string name);
-	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern string	mg_get_header(IntPtr ctx, string name);
-	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern string	mg_get_var(IntPtr ctx, string name);
-	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern void	mg_free(IntPtr ptr);
-	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern void	mg_get_option_list(IntPtr ctx);
-	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern int	mg_write(IntPtr conn, string data, int length);
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern void	mg_bind_to_uri(IntPtr ctx, string uri_regex, MulticastDelegate func, IntPtr data);
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern void	mg_set_log_callback(IntPtr ctx, MulticastDelegate func);
 
@@ -47,7 +45,12 @@ public class Mongoose {
 		ctx = mg_start();
 		version = mg_version();
 	}
-	
+
+	~Mongoose() {
+		mg_stop(this.ctx);
+		this.ctx = IntPtr.Zero;
+	}
+
 	public int set_option(string option_name, string option_value) {
 		return mg_set_option(this.ctx, option_name, option_value);
 	}
@@ -55,21 +58,48 @@ public class Mongoose {
 	public string get_option(string option_name) {
 		return mg_get_option(this.ctx, option_name);
 	}
-	
-	public string get_header(IntPtr conn, string header_name) {
-		return mg_get_header(conn, header_name);
-	}
-	
-	public int write(IntPtr conn, string data) {
-		return mg_write(conn, data, data.Length);
-	}
 
-	public void bind_to_uri(string uri_regex, MongooseCallback func, IntPtr data) {
-		mg_bind_to_uri(this.ctx, uri_regex, func, data);
+	public void bind_to_uri(string uri_regex, MongooseCallback func) {
+		// Build a closure around user function. Initialize connection object there which wraps
+		// mg_write() and other useful methods, and then call user specified handler.
+		MongooseCallback2 callback = delegate(IntPtr conn, ref MongooseRequestInfo ri, IntPtr user_data) {
+			MongooseConnection connection = new MongooseConnection(conn, this);
+			func(connection, ri);
+		};
+		mg_bind_to_uri(this.ctx, uri_regex, callback, IntPtr.Zero);
 	}
 	
 	public void set_log_callback(MongooseCallback func) {
 		mg_set_log_callback(this.ctx, func);
 	}
+}
 
+public class MongooseConnection {
+	public Mongoose	mongoose;
+	private IntPtr conn;
+
+	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern string	mg_get_header(IntPtr ctx, string name);
+	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern string	mg_get_var(IntPtr ctx, string name);
+	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern void	mg_free(IntPtr ptr);
+	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] public static extern int	mg_write(IntPtr conn, string data, int length);
+
+	public MongooseConnection(IntPtr conn_, Mongoose mongoose_) {
+		mongoose = mongoose_;
+		conn = conn_;
+	}
+
+	public string get_header(string header_name) {
+		return mg_get_header(this.conn, header_name);
+	}
+
+	public string get_var(string header_name) {
+		string s = mg_get_var(this.conn, header_name);
+		string copy = "" + s;
+		mg_free(Marshal.StringToHGlobalAnsi(s));
+		return copy;
+	}
+
+	public int write(string data) {
+		return mg_write(this.conn, data, data.Length);
+	}
 }
