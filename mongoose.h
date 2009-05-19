@@ -60,7 +60,8 @@ struct mg_request_info {
  *
  * mg_start		Start serving thread. Return server context.
  * mg_stop		Stop server thread, and release the context.
- * mg_set_option	Set an option for the running context.
+ * mg_set_option	Set an option for the running context, return 1
+ *			on success, 0 on error, -1 if option name is invalid.
  * mg_get_option	Get an option for the running context.
  * mg_get_option_list	Get a list of all known options, subject to mg_free()
  * mg_bind_to_uri	Associate user function with paticular URI.
@@ -70,12 +71,18 @@ struct mg_request_info {
  *			Error code is passed as status_code in request info.
  * mg_protect_uri	Bind authorization function to the URI regexp.
  * mg_set_log_callback	Set a function that will receive server log messages.
+ * mg_modify_passwords_file	Add, edit or delete the entry in the
+ *			passwords file. If password is not NULL, entry is added
+ *			(or modified if already exists). If password is NULL,
+ *			entry is deleted. Return 1 on success, 0 on error.
  */
 
 struct mg_context *mg_start(void);
 void mg_stop(struct mg_context *);
 const char *mg_get_option(struct mg_context *, const char *);
 int mg_set_option(struct mg_context *, const char *, const char *);
+int mg_modify_passwords_file(struct mg_context *ctx, const char *file_name,
+		const char *user_name, const char *password);
 
 /*
  * User-defined callback function for URI handling, error handling,
@@ -126,8 +133,7 @@ void mg_free(char *var);
  *		Fills buf with stringified \0 terminated MD5 hash.
  */
 const char *mg_version(void);
-void mg_help(FILE *fp);
-void mg_md5(char *buf, ...);
+void mg_show_usage_string(FILE *fp);
 
 #ifdef __cplusplus
 }

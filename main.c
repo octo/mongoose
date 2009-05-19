@@ -73,7 +73,7 @@ signal_handler(int sig_num)
 static void
 show_usage_and_exit(void)
 {
-	mg_help(stderr);
+	mg_show_usage_string(stderr);
 	exit(EXIT_FAILURE);
 }
 
@@ -85,55 +85,15 @@ static int
 mg_edit_passwords(const char *fname, const char *domain,
 		const char *user, const char *pass)
 {
-	int	ret = EXIT_SUCCESS, found = 0;
-	char	line[512], u[512], d[512], ha1[33], tmp[FILENAME_MAX];
-	FILE	*fp = NULL, *fp2 = NULL;
+	struct mg_context	*ctx;
+	int			retval;
 
-	(void) snprintf(tmp, sizeof(tmp), "%s.tmp", fname);
+	ctx = mg_start();
+	mg_set_option(ctx, "auth_realm", domain);
+	retval = mg_modify_passwords_file(ctx, fname, user, pass);
+	mg_stop(ctx);
 
-	/* Create the file if does not exist */
-	if ((fp = fopen(fname, "a+")) != NULL)
-		(void) fclose(fp);
-
-	/* Open the given file and temporary file */
-	if ((fp = fopen(fname, "r")) == NULL) {
-		fprintf(stderr, "Cannot open %s: %s", fname, strerror(errno));
-                exit(EXIT_FAILURE);
-        } else if ((fp2 = fopen(tmp, "w+")) == NULL) {
-		fprintf(stderr, "Cannot open %s: %s", tmp, strerror(errno));
-                exit(EXIT_FAILURE);
-        }
-
-	/* Copy the stuff to temporary file */
-	while (fgets(line, sizeof(line), fp) != NULL) {
-
-		if (sscanf(line, "%[^:]:%[^:]:%*s", u, d) != 2)
-			continue;
-
-		if (!strcmp(u, user) && !strcmp(d, domain)) {
-			found++;
-			mg_md5(ha1, user, ":", domain, ":", pass, NULL);
-			(void) fprintf(fp2, "%s:%s:%s\n", user, domain, ha1);
-		} else {
-			(void) fprintf(fp2, "%s", line);
-		}
-	}
-
-	/* If new user, just add it */
-	if (!found) {
-		mg_md5(ha1, user, ":", domain, ":", pass, NULL);
-		(void) fprintf(fp2, "%s:%s:%s\n", user, domain, ha1);
-	}
-
-	/* Close files */
-	(void) fclose(fp);
-	(void) fclose(fp2);
-
-	/* Put the temp file in place of real file */
-	(void) remove(fname);
-	(void) rename(tmp, fname);
-
-	return (ret);
+	return (retval);
 }
 #endif /* NO_AUTH */
 
@@ -315,6 +275,7 @@ main(int argc, char *argv[])
 	    mg_version(),
 	    mg_get_option(ctx, "ports"),
 	    mg_get_option(ctx, "root"));
+
 	fflush(stdout);
 	while (exit_flag == 0)
 		sleep(1);

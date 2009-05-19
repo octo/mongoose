@@ -1980,7 +1980,7 @@ bin2str(char *to, const unsigned char *p, size_t len)
  * Return stringified MD5 hash for list of vectors.
  * buf must point to 33-bytes long buffer
  */
-void
+static void
 mg_md5(char *buf, ...)
 {
 	unsigned char	hash[16];
@@ -2237,6 +2237,72 @@ is_authorized_for_put(struct mg_connection *conn)
 	}
 
 	return (ret);
+}
+
+int
+mg_modify_passwords_file(struct mg_context *ctx, const char *fname,
+		const char *user, const char *pass)
+{
+	int		found;
+	char		line[512], u[512], d[512], ha1[33], tmp[FILENAME_MAX];
+	const char	*domain;
+	FILE		*fp, *fp2;
+
+	found = 0;
+	fp = fp2 = NULL;
+	domain = ctx->options[OPT_AUTH_DOMAIN];
+
+	/* Regard empty password as no password - remove user record. */
+	if (pass[0] == '\0')
+		pass = NULL;
+
+	(void) snprintf(tmp, sizeof(tmp), "%s.tmp", fname);
+
+	/* Create the file if does not exist */
+	if ((fp = fopen(fname, "a+")) != NULL)
+		(void) fclose(fp);
+
+	/* Open the given file and temporary file */
+	if ((fp = fopen(fname, "r")) == NULL) {
+		cry(fc(ctx), "Cannot open %s: %s", fname, strerror(errno));
+		return (0);
+        } else if ((fp2 = fopen(tmp, "w+")) == NULL) {
+		cry(fc(ctx), "Cannot open %s: %s", tmp, strerror(errno));
+		return (0);
+        }
+
+	/* Copy the stuff to temporary file */
+	while (fgets(line, sizeof(line), fp) != NULL) {
+
+		if (sscanf(line, "%[^:]:%[^:]:%*s", u, d) != 2)
+			continue;
+
+		if (!strcmp(u, user) && !strcmp(d, domain)) {
+			found++;
+			if (pass != NULL) {
+				mg_md5(ha1, user, ":", domain, ":", pass, NULL);
+				fprintf(fp2, "%s:%s:%s\n", user, domain, ha1);
+			}
+		} else {
+			(void) fprintf(fp2, "%s", line);
+		}
+	}
+
+	/* If new user, just add it */
+	if (!found && pass != NULL) {
+		mg_md5(ha1, user, ":", domain, ":", pass, NULL);
+		(void) fprintf(fp2, "%s:%s:%s\n", user, domain, ha1);
+	}
+
+	/* Close files */
+	(void) fclose(fp);
+	(void) fclose(fp2);
+
+	/* Put the temp file in place of real file */
+	(void) remove(fname);
+	(void) rename(tmp, fname);
+
+	return (0);
 }
 #endif /* NO_AUTH */
 
@@ -3838,7 +3904,7 @@ mg_set_option(struct mg_context *ctx, const char *opt, const char *val)
 }
 
 void
-mg_help(FILE *fp)
+mg_show_usage_string(FILE *fp)
 {
 	const struct mg_option	*o;
 

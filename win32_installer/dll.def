@@ -2,7 +2,6 @@ LIBRARY
 EXPORTS
 	mg_start
 	mg_stop
-	mg_get_option_list
 	mg_get_option
 	mg_set_option
 	mg_bind_to_uri
@@ -17,4 +16,5 @@ EXPORTS
 	mg_get_var
 	mg_free
 	mg_version
-	mg_md5 
+	mg_show_usage_string
+	mg_modify_passwords_file
