@@ -1104,6 +1104,7 @@ set_non_blocking_mode(struct mg_connection *conn, SOCKET sock)
 {
         unsigned long   on = 1;
 
+	conn = NULL; /* unused */
         return (ioctlsocket(sock, FIONBIO, &on));
 }
 
