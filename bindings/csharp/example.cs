@@ -1,3 +1,9 @@
+// This is C# example on how to use Mongoose embeddable web server,
+// http://code.google.com/p/mongoose
+//
+// Before using the mongoose module, make sure that Mongoose shared library is
+// built and present in the current (or system library) directory
+
 using System;
 
 public class Program {
