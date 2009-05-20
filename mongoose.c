@@ -198,7 +198,6 @@ enum {FALSE, TRUE};
 typedef int bool_t;
 typedef void * (*mg_thread_func_t)(void *);
 
-static int tz_offset;
 static const char *http_500_error = "Internal Server Error";
 
 /*
@@ -2500,7 +2499,7 @@ static void
 send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 {
 	char		date[64], lm[64], etag[64], range[64];
-	const char	*fmt = "%a, %d %b %Y %H:%M:%S GMT", *msg = "OK";
+	const char	*fmt = "%a, %d %b %Y %H:%M:%S %Z", *msg = "OK";
 	const char	*mime_type, *s;
 	time_t		curtime = time(NULL);
 	unsigned long long	cl, r1, r2;
@@ -3481,18 +3480,18 @@ log_access(const struct mg_connection *conn)
 	if (conn->ctx->access_log == NULL)
 		return;
 
-	(void) strftime(date, sizeof(date), "%d/%b/%Y:%H:%M:%S",
-			localtime(&conn->birth_time));
+	(void) strftime(date, sizeof(date), "%d/%b/%Y:%H:%M:%S %z",
+	    localtime(&conn->birth_time));
 
 	ri = &conn->request_info;
 
 	flockfile(conn->ctx->access_log);
 
 	(void) fprintf(conn->ctx->access_log,
-	    "%s - %s [%s %+05d] \"%s %s HTTP/%d.%d\" %d %llu",
+	    "%s - %s [%s] \"%s %s HTTP/%d.%d\" %d %llu",
 	    inet_ntoa(conn->client.usa.u.sin.sin_addr),
 	    ri->remote_user == NULL ? "-" : ri->remote_user,
-	    date, tz_offset,
+	    date,
 	    ri->request_method ? ri->request_method : "-",
 	    ri->uri ? ri->uri : "-",
 	    ri->http_version_major, ri->http_version_minor,
@@ -4345,10 +4344,6 @@ mg_start(void)
 	}
 
 	DEBUG_TRACE("%s: root [%s]\n", __func__, ctx->options[OPT_ROOT]);
-
-#if 0
-	tm->tm_gmtoff - 3600 * (tm->tm_isdst > 0 ? 1 : 0);
-#endif
 
 #if !defined(_WIN32)
 	/*
