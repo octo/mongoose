@@ -57,13 +57,6 @@
 #define GetProcAddress GetProcAddressA
 #endif /* _WIN32_WCE */
 
-/*
- * Do not allow holes in data structures!
- * This is needed so when Mongoose DLL is loaded, other languages that
- * describe struct mg_request_info from mongoose.h, agree with C code.
- */
-#pragma pack(1)
-
 #define	__func__		__FUNCTION__
 #define	ERRNO			GetLastError()
 #define	NO_SOCKLEN_T
