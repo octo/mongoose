@@ -170,71 +170,6 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 		}
 }
 
-#ifdef _WIN32
-static SERVICE_STATUS		ss;
-static SERVICE_STATUS_HANDLE	hStatus;
-static char			service_name[20];
-
-static void WINAPI
-ControlHandler(DWORD code)
-{
-	if (code == SERVICE_CONTROL_STOP || code == SERVICE_CONTROL_SHUTDOWN) {
-		ss.dwWin32ExitCode = 0;
-		ss.dwCurrentState = SERVICE_STOPPED;
-	}
-
-	SetServiceStatus(hStatus, &ss);
-}
-
-static void WINAPI
-ServiceMain(void)
-{
-	char path[MAX_PATH], *p, *av[] = {"mongoose_service", NULL, NULL};
-	struct mg_context *ctx;
-
-	av[1] = path;
-
-	ss.dwServiceType      = SERVICE_WIN32;
-	ss.dwCurrentState     = SERVICE_RUNNING;
-	ss.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
-
-	hStatus = RegisterServiceCtrlHandler(service_name, ControlHandler);
-	SetServiceStatus(hStatus, &ss);
-
-	GetModuleFileName(NULL, path, sizeof(path));
-
-	if ((p = strrchr(path, DIRSEP)) != NULL)
-		*++p = '\0';
-
-	strcat(path, CONFIG_FILE);	/* woo ! */
-
-	Sleep(3000);
-	if ((ctx = mg_start()) != NULL) {
-		process_command_line_arguments(ctx, av);
-
-		while (ss.dwCurrentState == SERVICE_RUNNING)
-			Sleep(1000);
-		mg_stop(ctx);
-	}
-
-	ss.dwCurrentState  = SERVICE_STOPPED;
-	ss.dwWin32ExitCode = (DWORD) -1;
-	SetServiceStatus(hStatus, &ss);
-}
-
-static void
-try_to_run_as_nt_service(void)
-{
-	static SERVICE_TABLE_ENTRY service_table[] = {
-		{service_name, (LPSERVICE_MAIN_FUNCTION) ServiceMain},
-		{NULL, NULL}
-	};
-
-	if (StartServiceCtrlDispatcher(service_table))
-		exit(EXIT_SUCCESS);
-}
-#endif /* _WIN32 */
-
 int
 main(int argc, char *argv[])
 {
@@ -249,15 +184,9 @@ main(int argc, char *argv[])
 	if (argc == 2 && (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")))
 		show_usage_and_exit();
 
-#if defined(_WIN32)
-	(void) sprintf(service_name, "Mongoose %s", mg_version());
-	try_to_run_as_nt_service();
-#endif /* _WIN32 */
-
 #ifndef _WIN32
 	(void) signal(SIGCHLD, signal_handler);
 #endif /* _WIN32 */
-
 	(void) signal(SIGTERM, signal_handler);
 	(void) signal(SIGINT, signal_handler);
 

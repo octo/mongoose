@@ -19,6 +19,7 @@ Section "Mongoose files (required)"
   File ..\_mongoose.dll
   File mongoose.conf
   File README.txt
+  File srvany.exe
   WriteUninstaller uninstall.exe
 SectionEnd
 
@@ -33,8 +34,9 @@ Section "SSL files"
 SectionEnd
 
 Section "Run Mongoose as service"
-  ExecWait 'sc create "${SVC}" binpath= $INSTDIR\mongoose.exe start= auto depend= Tcpip'
+  ExecWait 'sc create "${SVC}" binpath= $INSTDIR\srvany.exe start= auto depend= Tcpip'
   ExecWait 'sc description "${SVC}" "Web server"'
+  WriteRegStr HKLM "System\CurrentControlSet\Services\${SVC}\Parameters" "Application" "$INSTDIR\mongoose.exe"
   ExecWait 'sc start "${SVC}"'
 SectionEnd
 

@@ -55,7 +55,7 @@ solaris:
 #    (or Itanium/amd64 command promt to build x64 version)
 # 4. In the command prompt, go to mongoose directory and do "nmake windows"
 
-#WINDBG=	/Zi /DDEBUG /Od
+#WINDBG=	/Zi /DDEBUG /Od /DDEBUG
 WINDBG=	/DNDEBUG /Os /Oi /GL /Gy
 WINOPT=	/MT /TC $(WINDBG) /nologo /W4 \
 	/D_CRT_SECURE_NO_WARNINGS /DHAVE_STRTOUI64
@@ -63,7 +63,7 @@ windows:
 	cl $(WINOPT) mongoose.c /link /incremental:no /DLL \
 		/DEF:win32_installer\dll.def /out:_$(PROG).dll ws2_32.lib
 	cl $(WINOPT) mongoose.c main.c /link /incremental:no \
-		/out:$(PROG).exe ws2_32.lib advapi32.lib
+		/out:$(PROG).exe ws2_32.lib
 
 # Build for Windows under MinGW
 #MINGWDBG= -DDEBUG -O0
