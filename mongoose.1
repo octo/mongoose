@@ -27,7 +27,11 @@ It is possible to specify multiple ports to listen on. For example, to
 make
 .Nm
 listen on HTTP port 80 and HTTPS port 443, one should start it as
-.Dq mongoose -ssl_cert cert.pem -ports 80,443s
+.Dq mongoose -ssl_cert cert.pem -ports 80,443s .
+.Pp
+Options may be specified in any order, with one exception: if SSL listening
+port is specified in the -ports option, then -ssl_cert option must be set
+before -ports option.
 .Pp
 Unlike other web servers,
 .Nm
@@ -74,7 +78,8 @@ Specify access control list (ACL). ACL is a comma separated list
 of IP subnets, each subnet is prepended by '-' or '+' sign. Plus means allow,
 minus means deny. If subnet mask is
 omitted, like "-1.2.3.4", then it means single IP address. Mask may vary
-from 0 to 32 inclusive. Default: not set, allow all.
+from 0 to 32 inclusive. On each request, full list is traversed, and
+last match wins. Default: not set, allow all.
 .It Fl admin_uri Ar uri
 If set,
 .Nm
@@ -127,8 +132,12 @@ Comma-separated list of ports to listen on. If the port is SSL, a letter 's'
 must be appeneded, for example, "-ports 80,443s" will open port 80 and port 443,
 and connections on port 443 will be SSL-ed. It is possible to specify an
 IP address to bind to. In this case, an IP address and a colon must be
-prepended to the port number, for example, "-ports 127.0.0.1:8080".
-Default: 8080
+prepended to the port number, for example, "-ports 127.0.0.1:8080". Note that
+if SSL listening port is requested, then
+.Fl ssl_cert
+option must specified BEFORE
+.Fl ports
+option. Default: 8080
 .It Fl protect Ar list
 Comma separated list of URI=PATH pairs, specifying that given URIs
 must the protected with respected password files. Default: not set.
