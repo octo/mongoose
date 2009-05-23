@@ -21,6 +21,10 @@
  *
  * $Id$
  */
+ 
+#if defined(_WIN32)
+#define _CRT_SECURE_NO_WARNINGS	/* Disable deprecation warning in VS2005 */
+#endif /* _WIN32 */
 
 #include <stdio.h>
 #include <stdlib.h>
