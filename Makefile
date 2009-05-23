@@ -56,13 +56,12 @@ solaris:
 # 4. In the command prompt, go to mongoose directory and do "nmake windows"
 
 #WINDBG=	/Zi /DDEBUG /Od /DDEBUG
-WINDBG=	/DNDEBUG /Os /Oi /GL /Gy
-WINOPT=	/MT /TC $(WINDBG) /nologo /W4 \
-	/D_CRT_SECURE_NO_WARNINGS /DHAVE_STRTOUI64
+WINDBG=	/DNDEBUG /Os
+WINFLAGS=	/MT /TC /nologo /W4 /DHAVE_STRTOUI64 $(WINDBG) 
 windows:
-	cl $(WINOPT) mongoose.c /link /incremental:no /DLL \
+	cl $(WINFLAGS) mongoose.c /link /incremental:no /DLL \
 		/DEF:win32_installer\dll.def /out:_$(PROG).dll ws2_32.lib
-	cl $(WINOPT) mongoose.c main.c /link /incremental:no \
+	cl $(WINFLAGS) mongoose.c main.c /link /incremental:no \
 		/out:$(PROG).exe ws2_32.lib
 
 # Build for Windows under MinGW
