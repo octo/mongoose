@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2004-2009 Sergey Lyubka
+ * Portions Copyright (c) 2009 Gilbert Wellisch
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -22,15 +23,19 @@
  * $Id$
  */
 
+#if defined(_WIN32)
+#define _CRT_SECURE_NO_WARNINGS	/* Disable deprecation warning in VS2005 */
+#endif /* _WIN32 */
+
 #ifndef _WIN32_WCE /* Some ANSI #includes are not available on Windows CE */
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <errno.h>
 #include <signal.h>
 #include <fcntl.h>
-#endif /* _WIN32_WCE */
+#endif /* !_WIN32_WCE */
 
+#include <time.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <assert.h>
@@ -50,11 +55,28 @@
 #include <io.h>
 #else /* _WIN32_WCE */
 /* Windows CE-specific definitions */
+#include <winsock2.h>
 #define NO_CGI	/* WinCE has no pipes */
-#define NO_GUI	/* temporarily until it is fixed */
-/* WinCE has both Unicode and ANSI versions of GetProcAddress */
-#undef GetProcAddress
-#define GetProcAddress GetProcAddressA
+#define NO_SSI	/* WinCE has no pipes */
+
+#define FILENAME_MAX	MAX_PATH
+#define BUFSIZ		4096
+
+#define O_BINARY	0x01
+#define O_RDONLY	0x02
+#define O_WRONLY	0x04
+#define O_CREAT		0x08
+#define O_TRUNC		0x10
+
+#define EPOCH_DIFF	0x019DB1DED53E8000ULL /* 116444736000000000 nsecs */
+#define RATE_DIFF	10000000ULL /* 100 nsecs */
+#define MAKEUQUAD(lo, hi)	((uint64_t)(((uint32_t)(lo)) | \
+				((uint64_t)((uint32_t)(hi))) << 32))
+
+#define errno			GetLastError()
+#define strerror(x)		_ultoa(x, (char *) _alloca(sizeof(x) *3 ), 10)
+#define	flockfile(x)		(void) 0
+#define	funlockfile(x)		(void) 0
 #endif /* _WIN32_WCE */
 
 #define	__func__		__FUNCTION__
@@ -66,9 +88,8 @@
 #define	IS_DIRSEP_CHAR(c)	((c) == '/' || (c) == '\\')
 #define	O_NONBLOCK		0
 #define	EWOULDBLOCK		WSAEWOULDBLOCK
-#define	dlopen(x,y)		LoadLibrary(x)
-#define	dlsym(x,y)		GetProcAddress((HINSTANCE) (x), (y))
 #define	_POSIX_
+#define LONGLONG_FMT		"I64"
 
 #if !defined(R_OK)
 #define	R_OK			04 /* for _access() */
@@ -77,8 +98,12 @@
 #define	SHUT_WR			1
 #define	snprintf		_snprintf
 #define	vsnprintf		_vsnprintf
+#define	sleep(x)		Sleep((x) * 1000)
+
 #define	popen(x, y)		_popen(x, y)
 #define	pclose(x)		_pclose(x)
+#define	dlopen(x,y)		LoadLibrary(x)
+#define	dlsym(x,y)		GetProcAddress((HINSTANCE) (x), (y))
 #define	access(x, y)		_access(x, y)
 #define	getcwd(x, y)		_getcwd(x, y)
 #define	write(x, y, z)		_write(x, y, (unsigned) z)
@@ -86,7 +111,6 @@
 #define	open(x, y, z)		_open(x, y, z)
 #define	lseek(x, y, z)		_lseek(x, y, z)
 #define	close(x)		_close(x)
-#define	sleep(x)		Sleep((x) * 1000)
 #define	flockfile(x)		_lock_file(x)
 #define	funlockfile(x)		_unlock_file(x)
 
@@ -155,6 +179,7 @@ typedef struct DIR {
 #define	mg_remove(x)		remove(x)
 #define	ERRNO			errno
 #define	INVALID_SOCKET		(-1)
+#define LONGLONG_FMT		"ll"
 typedef int SOCKET;
 
 #endif /* End of Windows and UNIX specific includes */
@@ -172,7 +197,12 @@ typedef int SOCKET;
 #define	UNKNOWN_CONTENT_LENGTH	((uint64_t) ~0ULL)
 
 #if defined(DEBUG)
+#ifndef _WIN32_WCE
 #define DEBUG_TRACE(...) fprintf(stderr, "***Mongoose debug*** " __VA_ARGS__)
+#else
+#define DEBUG_TRACE(...) { char buf[1024]; sprintf(buf, __VA_ARGS__);	\
+	NKDbgPrintfW(L"***Mongoose debug*** %hs", buf); }
+#endif /* _WIN32_WCE */
 #else
 #define DEBUG_TRACE(...)
 #endif /* DEBUG */
@@ -277,6 +307,23 @@ static struct ssl_func	crypto_sw[] = {
 	{"CRYPTO_set_id_callback",	NULL},
 	{NULL,				NULL}
 };
+
+/*
+ * Month names
+ */
+static const char *month_names[] = {
+	"Jan", "Feb", "Mar", "Apr", "May", "Jun",
+	"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+};
+
+#ifdef _WIN32_WCE
+/*
+ * Short Weekday Names
+ */
+static const char *short_weekday_names[] = {
+	"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
+};
+#endif /* _WIN32_WCE */
 
 /*
  * Unified socket address. For IPv6 support, add IPv6 address structure
@@ -412,6 +459,9 @@ cry(struct mg_connection *conn, const char *fmt, ...)
 
 	va_start(ap, fmt);
 	(void) vsnprintf(buf, sizeof(buf), fmt, ap);
+#if defined(DEBUG) && defined(_WIN32_WCE)
+	NKDbgPrintfW(L"%hs\n", buf);
+#endif /* DEBUG && _WIN32_WCE */
 	conn->ctx->log_callback(conn, &conn->request_info, buf);
 	va_end(ap);
 }
@@ -446,10 +496,18 @@ builtin_error_log(struct mg_connection *conn,
 
 	timestamp = time(NULL);
 
+#ifndef _WIN32_WCE
 	(void) fprintf(fp,
 	    "[%.*s] [error] [client %s] ",
 	    24, ctime(&timestamp),  /* Print 25 characters, no trailing \n */
 	    inet_ntoa(conn->client.usa.u.sin.sin_addr));
+#else
+	// writing out timestamp unformatted is easier then coding ctime
+	(void) fprintf(fp,
+	    "[%010d] [error] [client %s] ",
+	    timestamp,
+	    inet_ntoa(conn->client.usa.u.sin.sin_addr));
+#endif /* _WIN32_WCE */
 
 	if (request_info->request_method != NULL)
 		(void) fprintf(fp, "%s %s: ",
@@ -684,7 +742,7 @@ find_callback(const struct mg_context *ctx, bool_t is_auth,
 		    ((is_auth && cb->is_auth) || (!is_auth && !cb->is_auth)) &&
 		    match_regex(uri, cb->uri_regex)) || (uri == NULL &&
 		     (cb->status_code == 0 || cb->status_code == status_code)))
-		    return (cb);
+			return (cb);
 	}
 
 	return (NULL);
@@ -797,7 +855,8 @@ pthread_cond_init(pthread_cond_t *cv, const void *unused)
 static int
 pthread_cond_wait(pthread_cond_t *cv, pthread_mutex_t *mutex)
 {
-	SignalObjectAndWait(*mutex, *cv, INFINITE, FALSE);
+	ReleaseMutex(*mutex);
+	WaitForSingleObject(*cv, INFINITE);
 	WaitForSingleObject(*mutex, INFINITE);
 	return (0);
 }
@@ -872,6 +931,223 @@ to_unicode(const char *path, wchar_t *wbuf, size_t wbuf_len)
 	MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, (int) wbuf_len);
 }
 
+#ifdef _WIN32_WCE
+static time_t
+time(time_t *ptime)
+{
+	time_t		t;
+	SYSTEMTIME	st;
+	FILETIME	ft;
+
+	GetSystemTime(&st);
+	SystemTimeToFileTime(&st, &ft);
+	t = (time_t)((MAKEUQUAD(ft.dwLowDateTime, ft.dwHighDateTime) -
+	    EPOCH_DIFF) / RATE_DIFF);
+
+	if (ptime != NULL)
+		*ptime = t;
+
+	return (t);
+}
+
+static time_t
+mktime(struct tm *ptm)
+{
+	SYSTEMTIME	st;
+	FILETIME	ft, lft;
+
+	st.wYear = ptm->tm_year + 1900;
+	st.wMonth = ptm->tm_mon + 1;
+	st.wDay = ptm->tm_mday;
+	st.wHour = ptm->tm_hour;
+	st.wMinute = ptm->tm_min;
+	st.wSecond = ptm->tm_sec;
+	st.wMilliseconds = 0;
+
+	SystemTimeToFileTime(&st, &ft);
+	LocalFileTimeToFileTime(&ft, &lft);
+	return (time_t)((MAKEUQUAD(lft.dwLowDateTime, lft.dwHighDateTime) -
+	    EPOCH_DIFF) / RATE_DIFF);
+}
+
+static struct tm *
+localtime(const time_t *ptime, struct tm *ptm)
+{
+	uint64_t	t = ((uint64_t)*ptime) * RATE_DIFF + EPOCH_DIFF;
+	FILETIME	ft, lft;
+	SYSTEMTIME	st;
+	TIME_ZONE_INFORMATION	tzinfo;
+
+	if (ptm == NULL)
+		return NULL;
+
+	* (uint64_t *) &ft = t;
+	FileTimeToLocalFileTime(&ft, &lft);
+	FileTimeToSystemTime(&lft, &st);
+	ptm->tm_year = st.wYear - 1900;
+	ptm->tm_mon = st.wMonth - 1;
+	ptm->tm_wday = st.wDayOfWeek;
+	ptm->tm_mday = st.wDay;
+	ptm->tm_hour = st.wHour;
+	ptm->tm_min = st.wMinute;
+	ptm->tm_sec = st.wSecond;
+	ptm->tm_yday = 0; // hope nobody uses this
+	ptm->tm_isdst = ((GetTimeZoneInformation(&tzinfo) ==
+	    TIME_ZONE_ID_DAYLIGHT) ? 1 : 0);
+
+	return ptm;
+}
+
+static int
+mg_write(int fd, const void *buffer, unsigned count)
+{
+	DWORD	dwWritten;
+
+	if (WriteFile((HANDLE) fd, buffer, count, &dwWritten, NULL))
+		return ((int) dwWritten);
+	else
+		return (-1);
+}
+
+static int
+mg_read(int fd, void *buffer, unsigned count)
+{
+	DWORD	dwRead;
+
+	if (ReadFile((HANDLE)fd, buffer, count, &dwRead, NULL))
+		return ((int) dwRead);
+	else
+		return (-1);
+}
+
+static int
+mg_open(const char *filename, int oflag, int pmode)
+{
+	HANDLE	hFile;
+	DWORD	dwAccess = 0;
+	DWORD	dwCreate = OPEN_EXISTING;
+	DWORD	dwShare = 0;
+	wchar_t	wbuf[FILENAME_MAX];
+
+	to_unicode(filename, wbuf, ARRAY_SIZE(wbuf));
+
+	pmode = 0; // unused
+
+	if (oflag & O_RDONLY) {
+		dwAccess |= GENERIC_READ;
+		dwShare = FILE_SHARE_READ;
+	}
+	if (oflag & O_WRONLY)
+		dwAccess |= GENERIC_WRITE;
+	if (oflag & O_CREAT)
+		dwCreate = OPEN_ALWAYS;
+	if (oflag & O_TRUNC)
+		dwCreate = CREATE_ALWAYS;
+
+	hFile = CreateFileW(wbuf, dwAccess, dwShare, NULL,
+	    dwCreate, FILE_ATTRIBUTE_NORMAL, NULL);
+
+	if (hFile == INVALID_HANDLE_VALUE)
+		return (-1);
+
+	return ((int) hFile);
+}
+
+static long
+lseek(int fd, long offset, int origin)
+{
+	DWORD	dwPos;
+
+	dwPos = SetFilePointer((HANDLE)fd, offset, NULL, origin);
+
+	if (dwPos == INVALID_SET_FILE_POINTER)
+		return (-1);
+
+	return ((int) dwPos);
+}
+
+static int
+mg_close(int fd)
+{
+	return (CloseHandle((HANDLE) fd) == 0 ? -1 : 0)
+}
+
+static int 
+rename(const char* oldname, const char* newname)
+{
+	wchar_t	woldbuf[FILENAME_MAX];
+	wchar_t	wnewbuf[FILENAME_MAX];
+
+	to_unicode(oldname, woldbuf, ARRAY_SIZE(woldbuf));
+	to_unicode(newname, wnewbuf, ARRAY_SIZE(wnewbuf));
+
+	return (MoveFileW(woldbuf, wnewbuf) ? 0 : -1);
+}
+
+static HINSTANCE dlopen(LPCSTR lpLibFileName)
+{
+	wchar_t	wbuf[FILENAME_MAX];
+
+	to_unicode(lpLibFileName, wbuf, ARRAY_SIZE(wbuf));
+
+	return (LoadLibraryW(wbuf));
+}
+
+static int
+mg_remove(const char *path)
+{
+	wchar_t	wbuf[FILENAME_MAX];
+
+	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
+
+	return (DeleteFileW(wbuf) ? 0 : -1);
+}
+
+static int
+mg_stat(const char *path, struct mgstat *stp)
+{
+	HANDLE		hfind;
+	WIN32_FIND_DATAW info;
+	int		ok;
+	wchar_t		wbuf[FILENAME_MAX];
+
+	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
+	hfind = FindFirstFileW(wbuf, &info);
+	if (INVALID_HANDLE_VALUE != hfind) {
+		FindClose(hfind);
+		ok = 0;
+		stp->size = MAKEUQUAD(info.nFileSizeLow, info.nFileSizeHigh);
+		stp->mtime = (time_t)((MAKEUQUAD(
+		    info.ftLastWriteTime.dwLowDateTime,
+		    info.ftLastWriteTime.dwHighDateTime) - EPOCH_DIFF)
+				/ RATE_DIFF);
+		stp->is_directory = ((info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == FILE_ATTRIBUTE_DIRECTORY);
+	} else {
+		ok = -1;
+	}
+
+	return (ok);
+}
+
+static char *
+getcwd(char *buf, int nLen)
+{
+	wchar_t		wbuf[FILENAME_MAX];
+
+	if (GetModuleFileNameW(NULL, wbuf, FILENAME_MAX)) {
+		wchar_t *startModuleName = wcsrchr(wbuf, DIRSEP);
+		if (startModuleName != NULL) {
+			*startModuleName = L'\0';
+			if (WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, buf,
+			    nLen, NULL, NULL) > 0) {
+				return buf;
+			}
+		}
+	}
+
+	return (NULL);
+}
+#else
 static int
 mg_open(const char *path, int flags, int mode)
 {
@@ -912,6 +1188,22 @@ mg_remove(const char *path)
 	return (_wremove(wbuf));
 }
 
+static int
+mg_mkdir(const char *path, int mode)
+{
+	char	buf[FILENAME_MAX];
+	wchar_t	wbuf[FILENAME_MAX];
+
+	mode = 0; /* Unused */
+	mg_strlcpy(buf, path, sizeof(buf));
+	fix_directory_separators(buf);
+
+	MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, sizeof(wbuf));
+
+	return (CreateDirectoryW(wbuf, NULL) ? 0 : -1);
+}
+#endif /* _WIN32_WCE */
+
 /*
  * Implementation of POSIX opendir/closedir/readdir for Windows.
  */
@@ -919,19 +1211,20 @@ static DIR *
 opendir(const char *name)
 {
 	DIR	*dir = NULL;
-	char	path[FILENAME_MAX];
 	wchar_t	wpath[FILENAME_MAX];
+	DWORD attrs;
 
-	if (name == NULL || name[0] == '\0') {
-		errno = EINVAL;
+	if (name == NULL) {
+		SetLastError(ERROR_BAD_ARGUMENTS);
 	} else if ((dir = (DIR *) malloc(sizeof(*dir))) == NULL) {
-		errno = ENOMEM;
+		SetLastError(ERROR_NOT_ENOUGH_MEMORY);
 	} else {
-		(void) snprintf(path, sizeof(path), "%s/*", name);
-		to_unicode(path, wpath, ARRAY_SIZE(wpath));
-		dir->handle = FindFirstFileW(wpath, &dir->info);
-
-		if (dir->handle != INVALID_HANDLE_VALUE) {
+		to_unicode(name, wpath, ARRAY_SIZE(wpath));
+		attrs = GetFileAttributesW(wpath);
+		if (attrs != 0xFFFFFFFF &&
+		    ((attrs & FILE_ATTRIBUTE_DIRECTORY) == FILE_ATTRIBUTE_DIRECTORY)) {
+			wcscat(wpath, L"\\*");
+			dir->handle = FindFirstFileW(wpath, &dir->info);
 			dir->result.d_name[0] = '\0';
 		} else {
 			free(dir);
@@ -945,17 +1238,17 @@ opendir(const char *name)
 static int
 closedir(DIR *dir)
 {
-	int result = -1;
+	int result = 0;
 
 	if (dir != NULL) {
 		if (dir->handle != INVALID_HANDLE_VALUE)
 			result = FindClose(dir->handle) ? 0 : -1;
 
 		free(dir);
+	} else {
+		result = -1;
+		SetLastError(ERROR_BAD_ARGUMENTS);
 	}
-
-	if (result == -1)
-		errno = EBADF;
 
 	return (result);
 }
@@ -965,17 +1258,23 @@ readdir(DIR *dir)
 {
 	struct dirent *result = 0;
 
-	if (dir && dir->handle != INVALID_HANDLE_VALUE) {
-		if(!dir->result.d_name ||
-		    FindNextFileW(dir->handle, &dir->info)) {
+	if (dir) {
+		if (dir->handle != INVALID_HANDLE_VALUE) {
 			result = &dir->result;
-
 			WideCharToMultiByte(CP_UTF8, 0, dir->info.cFileName,
 			    -1, result->d_name,
 			    sizeof(result->d_name), NULL, NULL);
+
+			if (!FindNextFileW(dir->handle, &dir->info)) {
+				FindClose(dir->handle);
+				dir->handle = INVALID_HANDLE_VALUE;
+			}
+
+		} else {
+			SetLastError(ERROR_FILE_NOT_FOUND);
 		}
 	} else {
-		errno = EBADF;
+		SetLastError(ERROR_BAD_ARGUMENTS);
 	}
 
 	return (result);
@@ -984,12 +1283,22 @@ readdir(DIR *dir)
 #define	set_close_on_exec(fd)	/* No FD_CLOEXEC on Windows */
 
 static int
-start_thread(struct mg_context *ctx, void * (*func)(void *), void *param)
+start_thread(struct mg_context *ctx, mg_thread_func_t func, void *param)
 {
-	ctx = NULL;
-	return (_beginthread((void (__cdecl *)( void *))func, 0, param) == 0);
+	HANDLE	hThread;
+
+	ctx = NULL;	/* Unused */
+	
+	hThread = CreateThread(NULL, 0,
+	    (LPTHREAD_START_ROUTINE) func, param, 0, NULL);
+
+	if (hThread != NULL)
+		CloseHandle(hThread);
+
+	return (hThread == NULL ? -1 : 0);
 }
 
+#if !defined(NO_CGI)
 static int
 kill(pid_t pid, int sig_num)
 {
@@ -1075,29 +1384,15 @@ pipe(int *fds)
 {
 	return (_pipe(fds, BUFSIZ, _O_BINARY));
 }
-
-static int
-mg_mkdir(const char *path, int mode)
-{
-	char	buf[FILENAME_MAX];
-	wchar_t	wbuf[FILENAME_MAX];
-
-	mode = 0; /* Unused */
-	mg_strlcpy(buf, path, sizeof(buf));
-	fix_directory_separators(buf);
-
-	MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, sizeof(wbuf));
-
-	return (_wmkdir(wbuf));
-}
+#endif /* !NO_CGI */
 
 static int
 set_non_blocking_mode(struct mg_connection *conn, SOCKET sock)
 {
-        unsigned long   on = 1;
+	unsigned long	on = 1;
 
 	conn = NULL; /* unused */
-        return (ioctlsocket(sock, FIONBIO, &on));
+	return (ioctlsocket(sock, FIONBIO, &on));
 }
 
 #else
@@ -1127,7 +1422,7 @@ set_close_on_exec(int fd)
 }
 
 static int
-start_thread(struct mg_context *ctx, void * (*func)(void *), void *param)
+start_thread(struct mg_context *ctx, mg_thread_func_t func, void *param)
 {
 	pthread_t	thread_id;
 	pthread_attr_t	attr;
@@ -1201,17 +1496,17 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 static int
 set_non_blocking_mode(struct mg_connection *conn, SOCKET sock)
 {
-        int     flags, ok = -1;
+	int	flags, ok = -1;
 
-        if ((flags = fcntl(sock, F_GETFL, 0)) == -1) {
-                cry(conn, "%s: fcntl(F_GETFL): %d", __func__, ERRNO);
-        } else if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) != 0) {
-                cry(conn, "%s: fcntl(F_SETFL): %d", __func__, ERRNO);
-        } else {
-                ok = 0;        /* Success */
-        }
+	if ((flags = fcntl(sock, F_GETFL, 0)) == -1) {
+		cry(conn, "%s: fcntl(F_GETFL): %d", __func__, ERRNO);
+	} else if (fcntl(sock, F_SETFL, flags | O_NONBLOCK) != 0) {
+		cry(conn, "%s: fcntl(F_SETFL): %d", __func__, ERRNO);
+	} else {
+		ok = 0;	/* Success */
+	}
 
-        return (ok);
+	return (ok);
 }
 #endif /* _WIN32 */
 
@@ -1328,7 +1623,7 @@ url_decode(const char *src, size_t src_len, char *dst, size_t dst_len,
 {
 	size_t	i, j;
 	int	a, b;
-#define	HEXTOI(x)  (isdigit(x) ? x - '0' : x - 'W')
+#define	HEXTOI(x)	(isdigit(x) ? x - '0' : x - 'W')
 
 	for (i = j = 0; i < src_len && j < dst_len - 1; i++, j++) {
 		if (src[i] == '%' &&
@@ -1443,7 +1738,7 @@ make_path(struct mg_connection *conn, const char *uri,
 
 	/* If requested URI has aliased prefix, use alternate root */
 	lock_option(ctx, OPT_ALIASES);
-       	s = ctx->options[OPT_ALIASES];
+	s = ctx->options[OPT_ALIASES];
 	FOR_EACH_WORD_IN_LIST(s, len) {
 
 		p = (char *) memchr(s, '=', len);
@@ -1461,7 +1756,7 @@ make_path(struct mg_connection *conn, const char *uri,
 #ifdef _WIN32
 	for (p = buf; *p != '\0'; p++)
 		if (*p == '/')
-			*p = '\\';
+			*p = DIRSEP;
 #endif /* _WIN32 */
 }
 
@@ -1503,7 +1798,7 @@ mg_open_listening_port(struct mg_context *ctx, const char *str)
 		set_close_on_exec(sock);
 	} else {
 		/* Error */
-		cry(fc(ctx), "%s(%d): %s", __func__, port, strerror(errno));
+		cry(fc(ctx), "%s(%d): %s", __func__, port, strerror(ERRNO));
 		if (sock != INVALID_SOCKET)
 			(void) closesocket(sock);
 		sock = INVALID_SOCKET;
@@ -1544,10 +1839,6 @@ get_request_len(const char *buf, size_t buflen)
 static int
 montoi(const char *s)
 {
-	static const char *month_names[] = {
-		"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-	};
 	size_t	i;
 
 	for (i = 0; i < sizeof(month_names) / sizeof(month_names[0]); i++)
@@ -1563,8 +1854,11 @@ montoi(const char *s)
 static time_t
 date_to_epoch(const char *s)
 {
-	struct tm	tm, *tmp;
+#ifndef _WIN32_WCE
 	time_t		current_time;
+	struct tm *tmp;
+#endif /* !_WIN32_WCE */
+	struct tm	tm;
 	char		mon[32];
 	int		sec, min, hour, mday, month, year;
 
@@ -1593,10 +1887,12 @@ date_to_epoch(const char *s)
 	else if (tm.tm_year < 70)
 		tm.tm_year += 100;
 
+#ifndef _WIN32_WCE
 	/* Set Daylight Saving Time field */
 	current_time = time(NULL);
 	tmp = localtime(&current_time);
 	tm.tm_isdst = tmp->tm_isdst;
+#endif /* _WIN32_WCE */
 
 	return (mktime(&tm));
 }
@@ -2259,10 +2555,10 @@ mg_modify_passwords_file(struct mg_context *ctx, const char *fname,
 	if ((fp = fopen(fname, "r")) == NULL) {
 		cry(fc(ctx), "Cannot open %s: %s", fname, strerror(errno));
 		return (0);
-        } else if ((fp2 = fopen(tmp, "w+")) == NULL) {
+	} else if ((fp2 = fopen(tmp, "w+")) == NULL) {
 		cry(fc(ctx), "Cannot open %s: %s", tmp, strerror(errno));
 		return (0);
-        }
+	}
 
 	/* Copy the stuff to temporary file */
 	while (fgets(line, sizeof(line), fp) != NULL) {
@@ -2292,7 +2588,7 @@ mg_modify_passwords_file(struct mg_context *ctx, const char *fname,
 	(void) fclose(fp2);
 
 	/* Put the temp file in place of real file */
-	(void) remove(fname);
+	(void) mg_remove(fname);
 	(void) rename(tmp, fname);
 
 	return (0);
@@ -2312,6 +2608,9 @@ struct de {
 static void
 print_dir_entry(struct de *de)
 {
+#ifdef _WIN32_WCE
+	struct tm tm;
+#endif /* _WIN32_WCE */
 	char		size[64], mod[64];
 
 	if (de->st.is_directory) {
@@ -2331,8 +2630,15 @@ print_dir_entry(struct de *de)
 			(void) mg_snprintf(de->conn, size, sizeof(size),
 			    "%.1fG", (double) de->st.size / 1073741824);
 	}
+#ifndef _WIN32_WCE
 	(void) strftime(mod, sizeof(mod), "%d-%b-%Y %H:%M",
 		localtime(&de->st.mtime));
+#else
+	(void) localtime(&de->st.mtime, &tm);
+	(void) sprintf(mod, "%02.2d-%3.3s-%04.4d %02.2d:%02.2d",
+	    tm.tm_mday, month_names[tm.tm_mon],
+	    tm.tm_year + 1900, tm.tm_hour, tm.tm_min);
+#endif /* _WIN32_WCE */
 	de->conn->num_bytes_sent += mg_printf(de->conn,
 	    "<tr><td><a href=\"%s%s\">%s%s</a></td>"
 	    "<td>&nbsp;%s</td><td>&nbsp;&nbsp;%s</td></tr>\n",
@@ -2491,6 +2797,9 @@ send_opened_file_stream(struct mg_connection *conn, int fd, uint64_t len)
 static void
 send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 {
+#ifdef _WIN32_WCE
+	struct tm tm;
+#endif /* _WIN32_WCE */
 	char		date[64], lm[64], etag[64], range[64];
 	const char	*fmt = "%a, %d %b %Y %H:%M:%S %Z", *msg = "OK";
 	const char	*mime_type, *s;
@@ -2513,20 +2822,33 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	/* If Range: header specified, act accordingly */
 	s = mg_get_header(conn, "Range");
 	r1 = r2 = 0;
-	if (s != NULL && (n = sscanf(s, "bytes=%llu-%llu", &r1, &r2)) > 0) {
+	if (s != NULL && (n = sscanf(s,
+	    "bytes=%" LONGLONG_FMT "u-%" LONGLONG_FMT "u", &r1, &r2)) > 0) {
 		conn->request_info.status_code = 206;
 		(void) lseek(fd, (long) r1, SEEK_SET);
 		cl = n == 2 ? r2 - r1 + 1: cl - r1;
 		(void) mg_snprintf(conn, range, sizeof(range),
 		    "Content-Range: bytes "
-		    "%llu-%llu/%llu\r\n",
+		    "%" LONGLONG_FMT "u-%"
+		    LONGLONG_FMT "u/%" LONGLONG_FMT "u\r\n",
 		    r1, r1 + cl - 1, (unsigned long long) stp->size);
 		msg = "Partial Content";
 	}
 
 	/* Prepare Etag, Date, Last-Modified headers */
+#ifndef _WIN32_WCE
 	(void) strftime(date, sizeof(date), fmt, localtime(&curtime));
 	(void) strftime(lm, sizeof(lm), fmt, localtime(&stp->mtime));
+#else
+	localtime(&curtime, &tm);
+	sprintf(date, "%3.3s, %02.2d %3.3s %04.4d %02.2d:%02.2d:%02.2d GMT",
+	    short_weekday_names[tm.tm_wday], tm.tm_mday, month_names[tm.tm_mon],
+	    tm.tm_year + 1900, tm.tm_hour, tm.tm_min, tm.tm_sec);
+	localtime(&stp->mtime, &tm);
+	sprintf(lm, "%3.3s, %02.2d %3.3s %04.4d %02.2d:%02.2d:%02.2d GMT",
+	    short_weekday_names[tm.tm_wday], tm.tm_mday, month_names[tm.tm_mon],
+	    tm.tm_year + 1900, tm.tm_hour, tm.tm_min, tm.tm_sec);
+#endif /* _WIN32_WCE */
 	(void) mg_snprintf(conn, etag, sizeof(etag), "%lx.%lx",
 	    (unsigned long) stp->mtime, (unsigned long) stp->size);
 
@@ -2539,7 +2861,7 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	    "Last-Modified: %s\r\n"
 	    "Etag: \"%s\"\r\n"
 	    "Content-Type: %.*s\r\n"
-	    "Content-Length: %llu\r\n"
+	    "Content-Length: %" LONGLONG_FMT "u\r\n"
 	    "Connection: %s\r\n"
 	    "Accept-Ranges: bytes\r\n"
 	    "%s\r\n",
@@ -2648,7 +2970,11 @@ substitute_index_file(struct mg_connection *conn,
 	bool_t		found;
 
 	n = strlen(path);
-	path[n] = DIRSEP;
+	if (n > 0 && IS_DIRSEP_CHAR(path[n - 1])) {
+		n--;
+	} else {
+		path[n] = DIRSEP;
+	}
 	found = FALSE;
 
 	lock_option(conn->ctx, OPT_INDEX_FILES);
@@ -2819,7 +3145,7 @@ handle_request_body(struct mg_connection *conn, int fd)
 		/* Each error code path in this function must send an error */
 		if (success_code != TRUE)
 			send_error(conn, 577, http_500_error,
-			   "%s", "Error handling body data");
+			    "%s", "Error handling body data");
 	}
 
 	return (success_code);
@@ -3467,21 +3793,30 @@ log_header(const struct mg_connection *conn, const char *header, FILE *fp)
 static void
 log_access(const struct mg_connection *conn)
 {
+#ifdef _WIN32_WCE
+	struct tm tm;
+#endif /* _WIN32_WCE */
 	const struct mg_request_info *ri;
 	char		date[64];
 
 	if (conn->ctx->access_log == NULL)
 		return;
 
+#ifndef _WIN32_WCE
 	(void) strftime(date, sizeof(date), "%d/%b/%Y:%H:%M:%S %z",
 	    localtime(&conn->birth_time));
+#else
+	localtime(&conn->birth_time, &tm);
+	sprintf(date, "%02.2d/%3.3s/%04.4d:%02.2d:%02.2d:%02.2d",
+	    tm.tm_mday, month_names[tm.tm_mon], tm.tm_year + 1900, tm.tm_hour, tm.tm_min, tm.tm_sec);
+#endif /* _WIN32_WCE */
 
 	ri = &conn->request_info;
 
 	flockfile(conn->ctx->access_log);
 
 	(void) fprintf(conn->ctx->access_log,
-	    "%s - %s [%s] \"%s %s HTTP/%d.%d\" %d %llu",
+	    "%s - %s [%s] \"%s %s HTTP/%d.%d\" %d %" LONGLONG_FMT "u",
 	    inet_ntoa(conn->client.usa.u.sin.sin_addr),
 	    ri->remote_user == NULL ? "-" : ri->remote_user,
 	    date,
@@ -3644,10 +3979,10 @@ ssl_locking_callback(int mode, int mutex_num, const char *file, int line)
 	line = 0;	/* Unused */
 	file = NULL;	/* Unused */
 
-        if (mode & CRYPTO_LOCK)
-                (void) pthread_mutex_lock(&ssl_mutexes[mutex_num]);
-        else
-                (void) pthread_mutex_unlock(&ssl_mutexes[mutex_num]);
+	if (mode & CRYPTO_LOCK)
+		(void) pthread_mutex_lock(&ssl_mutexes[mutex_num]);
+	else
+		(void) pthread_mutex_unlock(&ssl_mutexes[mutex_num]);
 }
 
 static unsigned long
@@ -3780,8 +4115,24 @@ set_elog_option(struct mg_context *ctx, const char *path)
 static bool_t
 set_gpass_option(struct mg_context *ctx, const char *path)
 {
+#ifndef _WIN32_WCE
 	ctx = NULL;
 	return (access(path, R_OK) == 0);
+#else
+	HANDLE hFile;
+	wchar_t	wbuf[FILENAME_MAX];
+	ctx = NULL;
+
+	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
+
+	hFile = CreateFile(wbuf, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hFile != INVALID_HANDLE_VALUE) {
+		CloseHandle(hFile);
+		return (TRUE);
+	} else {
+		return (FALSE);
+	}
+#endif /* _WIN32_WCE */
 }
 #endif /* !NO_AUTH */
 
@@ -3947,15 +4298,15 @@ admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
 		option_value = mg_get_var(conn, "v");
 		if (mg_set_option(conn->ctx,
 		    option_name, option_value) == -1) {
-			    (void) mg_printf(conn,
+			(void) mg_printf(conn,
 			    "<p style=\"background: red\">Error setting "
-					    "option \"%s\"</p>",
+			    "option \"%s\"</p>",
 			    option_name ? option_name : "(null)");
-		    } else {
-			    (void) mg_printf(conn,
+		} else {
+			(void) mg_printf(conn,
 			    "<p style=\"color: green\">Saved: %s=%s</p>",
 			    option_name, option_value ? option_value : "NULL");
-		    }
+		}
 	}
 
 	/* Print table with all options */
@@ -4117,9 +4468,9 @@ process_new_connection(struct mg_connection *conn)
 
 		if (parse_http_request(buf, ri, &conn->client.usa)) {
 			if (ri->http_version_major != 1 ||
-			     (ri->http_version_major == 1 &&
-			     (ri->http_version_minor < 0 ||
-			     ri->http_version_minor > 1))) {
+			    (ri->http_version_major == 1 &&
+			    (ri->http_version_minor < 0 ||
+			    ri->http_version_minor > 1))) {
 				send_error(conn, 505,
 				    "HTTP version not supported",
 				    "%s", "Weird HTTP version");
