@@ -116,7 +116,7 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 			show_usage_and_exit();
 
 	if (argv[i] != NULL && argv[i + 1] != NULL) {
-		/* More than one non-option arguments are given w*/
+		/* More than one non-option arguments are given */
 		show_usage_and_exit();
 	} else if (argv[i] != NULL) {
 		/* Just one non-option argument is given, this is config file */
