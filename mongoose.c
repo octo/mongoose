@@ -1854,11 +1854,8 @@ montoi(const char *s)
 static time_t
 date_to_epoch(const char *s)
 {
-#ifndef _WIN32_WCE
 	time_t		current_time;
-	struct tm *tmp;
-#endif /* !_WIN32_WCE */
-	struct tm	tm;
+	struct tm	tm, *tmp;
 	char		mon[32];
 	int		sec, min, hour, mday, month, year;
 
@@ -1887,12 +1884,10 @@ date_to_epoch(const char *s)
 	else if (tm.tm_year < 70)
 		tm.tm_year += 100;
 
-#ifndef _WIN32_WCE
 	/* Set Daylight Saving Time field */
 	current_time = time(NULL);
 	tmp = localtime(&current_time);
 	tm.tm_isdst = tmp->tm_isdst;
-#endif /* _WIN32_WCE */
 
 	return (mktime(&tm));
 }
