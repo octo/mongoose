@@ -17,6 +17,7 @@ Section "Mongoose files (required)"
   SetOutPath $INSTDIR
   File ..\mongoose.exe
   File ..\_mongoose.dll
+  File ..\_mongoose.lib
   File mongoose.conf
   File README.txt
   File srvany.exe
@@ -27,9 +28,17 @@ Section "SSL files"
   File ssleay32.dll
   File libeay32.dll
   File ssl_cert.pem
+
+  # Following lines add full path to the certificate file in the mongoose.conf
+  # The -ssl_cert option must go before -ports option.
   FileOpen $0 mongoose.conf a
-  FileSeek $0 0 END
-  FileWrite $0 "ssl_cert $INSTDIR\ssl_cert.pem"
+  FileRead $0 $1
+  FileRead $0 $1
+  FileRead $0 $1
+  FileRead $0 $1
+  FileRead $0 $1
+  FileRead $0 $1
+  FileWrite $0 "ssl_cert	$INSTDIR\ssl_cert.pem"
   FileClose $0
 SectionEnd
 
@@ -37,6 +46,7 @@ Section "Run Mongoose as service"
   ExecWait 'sc create "${SVC}" binpath= $INSTDIR\srvany.exe start= auto depend= Tcpip'
   ExecWait 'sc description "${SVC}" "Web server"'
   WriteRegStr HKLM "System\CurrentControlSet\Services\${SVC}\Parameters" "Application" "$INSTDIR\mongoose.exe"
+  WriteRegStr HKLM "System\CurrentControlSet\Services\${SVC}\Parameters" "AppDirectory" "$INSTDIR"
   ExecWait 'sc start "${SVC}"'
 SectionEnd
 
