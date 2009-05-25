@@ -3760,8 +3760,8 @@ set_ports_option(struct mg_context *ctx, const char *p)
 			return (FALSE);
 		} else if (is_ssl == TRUE && ctx->ssl_ctx == NULL) {
 			(void) closesocket(sock);
-			cry(fc(ctx), "cannot add SSL socket, "
-			    "please specify certificate file");
+			cry(fc(ctx), "cannot add SSL socket, please specify "
+			    "-ssl_cert option BEFORE -ports option");
 			return (FALSE);
 		} else {
 			ctx->listeners[ctx->num_listeners].sock = sock;
