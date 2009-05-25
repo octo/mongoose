@@ -4558,18 +4558,10 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 			(void) pthread_cond_wait(&ctx->thr_cond,
 			    &ctx->thr_mutex);
 
-		/*
-		 * Sequence is important here: first num_threads must
-		 * be incremented, and then new thread started.
-		 * Otherwise, worker thread may do num_threads--
-		 * before master does num_threads++, breaking the
-		 * assertion. Thanks to blavier@adeneo.eu for helping
-		 * to debug this.
-		 * TODO: add error check for start_thread().
-		 */
 		ctx->num_threads++;
 		(void) pthread_mutex_unlock(&ctx->thr_mutex);
 
+		/* TODO: add error check for start_thread() */
 		if (start_thread(ctx, (mg_thread_func_t)
 		    worker_thread, conn) != 0) {
 			cry(fc(ctx), "Cannot start thread: %d", ERRNO);
@@ -4607,7 +4599,7 @@ master_thread(struct mg_context *ctx)
 			 * (at least on my Windows XP Pro). So in this case,
 			 * we sleep here.
 			 */
-			Sleep(1000);
+			sleep(1);
 #endif /* _WIN32 */
 		} else {
 			lock_option(ctx, OPT_PORTS);
