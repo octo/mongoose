@@ -60,7 +60,7 @@ WINDBG=	/DNDEBUG /Os
 WINFLAGS=	/MT /TC /nologo /W4 /DHAVE_STRTOUI64 $(WINDBG) 
 windows:
 	cl $(WINFLAGS) mongoose.c /link /incremental:no /DLL \
-		/DEF:win32_installer\dll.def /out:_$(PROG).dll ws2_32.lib
+		/DEF:win32\dll.def /out:_$(PROG).dll ws2_32.lib
 	cl $(WINFLAGS) mongoose.c main.c /link /incremental:no \
 		/out:$(PROG).exe ws2_32.lib
 
@@ -90,7 +90,7 @@ do_test:
 	perl test/test.pl $(TEST)
 
 release: clean
-	F=mongoose-`perl -lne '/define\s+MONGOOSE_VERSION\s+"(\S+)"/ and print $$1' mongoose.c`.tgz ; cd .. && tar --exclude \*.svn --exclude \*.swp --exclude \*.nfs\* --exclude win32_installer -czf x mongoose && mv x mongoose/$$F
+	F=mongoose-`perl -lne '/define\s+MONGOOSE_VERSION\s+"(\S+)"/ and print $$1' mongoose.c`.tgz ; cd .. && tar --exclude \*.svn --exclude \*.swp --exclude \*.nfs\* --exclude win32 -czf x mongoose && mv x mongoose/$$F
 
 clean:
 	rm -rf *.o *.core $(PROG) *.obj $(PROG).1.txt *.dSYM *.tgz
