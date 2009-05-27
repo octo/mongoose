@@ -4276,7 +4276,7 @@ mg_show_usage_string(FILE *fp)
 }
 
 const char *
-mg_get_option(struct mg_context *ctx, const char *option_name)
+mg_get_option(const struct mg_context *ctx, const char *option_name)
 {
 	const struct mg_option	*option;
 
