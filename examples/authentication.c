@@ -98,8 +98,8 @@ main(int argc, char *argv[])
 
 	ctx = mg_start();
 	mg_set_option(ctx, "ports", "8080");
-	mg_protect_uri(ctx, "/*", &authorize, NULL);
-	mg_bind_to_uri(ctx, "/login", &login_page, NULL);
+	mg_set_auth_callback(ctx, "/*", &authorize, NULL);
+	mg_set_uri_callback(ctx, "/login", &login_page, NULL);
 
 	for (;;)
 		sleep(1);

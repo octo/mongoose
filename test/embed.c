@@ -163,18 +163,19 @@ int main(void)
 	ctx = mg_start();
 	mg_set_option(ctx, "ports", LISTENING_PORT);
 
-	mg_bind_to_uri(ctx, "/test_get_header", &test_get_header, NULL);
-	mg_bind_to_uri(ctx, "/test_get_var", &test_get_var, NULL);
-	mg_bind_to_uri(ctx, "/test_get_request_info", &test_get_ri, NULL);
-	mg_bind_to_uri(ctx, "/foo/*", &test_get_ri, NULL);
-	mg_bind_to_uri(ctx, "/test_user_data", &test_user_data, &user_data);
-	mg_bind_to_uri(ctx, "/p", &test_post, NULL);
-	mg_bind_to_uri(ctx, "/put", &test_put, NULL);
+	mg_set_uri_callback(ctx, "/test_get_header", &test_get_header, NULL);
+	mg_set_uri_callback(ctx, "/test_get_var", &test_get_var, NULL);
+	mg_set_uri_callback(ctx, "/test_get_request_info", &test_get_ri, NULL);
+	mg_set_uri_callback(ctx, "/foo/*", &test_get_ri, NULL);
+	mg_set_uri_callback(ctx, "/test_user_data",
+			&test_user_data, &user_data);
+	mg_set_uri_callback(ctx, "/p", &test_post, NULL);
+	mg_set_uri_callback(ctx, "/put", &test_put, NULL);
 
-	mg_bind_to_error_code(ctx, 404, &test_error, NULL);
-	mg_bind_to_error_code(ctx, 0, &test_error, NULL);
+	mg_set_error_callback(ctx, 404, &test_error, NULL);
+	mg_set_error_callback(ctx, 0, &test_error, NULL);
 
-	mg_protect_uri(ctx, "/foo/secret", &test_protect, (void *) "joe");
+	mg_set_auth_callback(ctx, "/foo/secret", &test_protect, (void *) "joe");
 
 	for (;;)
 		(void) getchar();

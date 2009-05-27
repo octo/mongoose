@@ -2997,9 +2997,6 @@ substitute_index_file(struct mg_connection *conn,
 	return (found);
 }
 
-/*
- * Internal function, that is called by mg_bind_to_uri(),
- */
 static void
 mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
 		mg_callback_t func, bool_t is_auth, void *user_data)
@@ -3022,7 +3019,7 @@ mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
 }
 
 void
-mg_bind_to_uri(struct mg_context *ctx, const char *uri_regex,
+mg_set_uri_callback(struct mg_context *ctx, const char *uri_regex,
 		mg_callback_t func, void *user_data)
 {
 	assert(func != NULL);
@@ -3031,7 +3028,7 @@ mg_bind_to_uri(struct mg_context *ctx, const char *uri_regex,
 }
 
 void
-mg_bind_to_error_code(struct mg_context *ctx, int error_code,
+mg_set_error_callback(struct mg_context *ctx, int error_code,
 		mg_callback_t func, void *user_data)
 {
 	assert(error_code >= 0 && error_code < 1000);
@@ -3040,7 +3037,7 @@ mg_bind_to_error_code(struct mg_context *ctx, int error_code,
 }
 
 void
-mg_protect_uri(struct mg_context *ctx, const char *uri_regex,
+mg_set_auth_callback(struct mg_context *ctx, const char *uri_regex,
 		mg_callback_t func, void *user_data)
 {
 	assert(func != NULL);
@@ -4156,7 +4153,7 @@ static void admin_page(struct mg_connection *,
 static bool_t
 set_admin_uri_option(struct mg_context *ctx, const char *uri)
 {
-	mg_bind_to_uri(ctx, uri, &admin_page, NULL);
+	mg_set_uri_callback(ctx, uri, &admin_page, NULL);
 	return (TRUE);
 }
 
