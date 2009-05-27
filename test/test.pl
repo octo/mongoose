@@ -189,6 +189,12 @@ o("GET / HTTP/1.1z\r\n\r\n", '400 Bad Request', 'Bad HTTP min Version', 0);
 o("GET / HTTP/02.0\r\n\r\n", '505 HTTP version not supported',
 	'HTTP Version >1.1');
 
+# File with leading single dot
+o("GET /.leading.dot.txt HTTP/1.0\n\n", 'abc123', 'Leading dot 1');
+o("GET /...leading.dot.txt HTTP/1.0\n\n", 'abc123', 'Leading dot 2');
+o("GET /../\\\\/.//...leading.dot.txt HTTP/1.0\n\n", 'abc123', 'Leading dot 3');
+o("GET .. HTTP/1.0\n\n", '400 Bad Request', 'Leading dot 4', 0);
+
 mkdir $test_dir unless -d $test_dir;
 o("GET /$test_dir_uri/not_exist HTTP/1.0\n\n",
 	'HTTP/1.1 404', 'PATH_INFO loop problem');

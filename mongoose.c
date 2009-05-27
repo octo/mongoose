@@ -1891,18 +1891,25 @@ date_to_epoch(const char *s)
 }
 
 /*
- * Protect against directory disclosure attack by removing '..'
+ * Protect against directory disclosure attack by removing '..',
+ * excessive '/' and '\' characters
  */
 static void
-remove_double_dots(char *s)
+normalize_uri(char *s)
 {
 	char	*p = s;
 
 	while (*s != '\0') {
 		*p++ = *s++;
-		if (s[-1] == '/' || s[-1] == '\\')
-			while (*s == '.' || *s == '/' || *s == '\\')
+		if (s[-1] == '/' || s[-1] == '\\') {
+			/* Skip all following slashes and backslashes */
+			while (*s == '/' || *s == '\\')
 				s++;
+
+			/* Skip all double-dots */
+			while (*s == '.' && s[1] == '.')
+				s += 2;
+		}
 	}
 	*p = '\0';
 }
@@ -3647,7 +3654,7 @@ analyze_request(struct mg_connection *conn)
 		* conn->request_info.query_string++ = '\0';
 
 	(void) url_decode(uri, (int) strlen(uri), uri, strlen(uri) + 1, FALSE);
-	remove_double_dots(uri);
+	normalize_uri(uri);
 	make_path(conn, uri, path, sizeof(path));
 
 #if !defined(NO_AUTH)
