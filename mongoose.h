@@ -96,10 +96,11 @@ int mg_set_option(struct mg_context *, const char *opt_name, const char *value);
 
 /*
  * Add, edit or delete the entry in the passwords file.
- * This function allows the application to manipulate .htpasswd files on the
- * fly by adding, deleting and changing the users. This is one of two ways
- * of implementing authentication on the server side, for cookie-based way
- * please refer to the examples/authentication.c in the source tree.
+ * This function allows an application to manipulate .htpasswd files on the
+ * fly by adding, deleting and changing user records. This is one of the two
+ * ways of implementing authentication on the server side. For another,
+ * cookie-based way please refer to the examples/authentication.c in the
+ * source tree.
  * If password is not NULL, entry is added (or modified if already exists).
  * If password is NULL, entry is deleted. Return:
  *	1 on success
@@ -126,6 +127,7 @@ typedef void (*mg_callback_t)(struct mg_connection *,
  */
 void mg_set_uri_callback(struct mg_context *ctx, const char *uri_regex,
 		mg_callback_t func, void *user_data);
+
 
 /*
  * Register HTTP error handler.
