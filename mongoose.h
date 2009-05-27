@@ -76,7 +76,7 @@ void mg_stop(struct mg_context *);
 /*
  * Return current value of a particular option.
  */
-const char *mg_get_option(struct mg_context *, const char *);
+const char *mg_get_option(struct mg_context *, const char *option_name);
 
 
 /*
@@ -91,7 +91,7 @@ const char *mg_get_option(struct mg_context *, const char *);
  *	0  if mg_set_option() failed
  *	1  if mg_set_option() succeeded 
  */
-int mg_set_option(struct mg_context *, const char *, const char *);
+int mg_set_option(struct mg_context *, const char *opt_name, const char *value);
 
 
 /*
