@@ -412,6 +412,7 @@ struct mg_context {
 	int		num_threads;	/* Number of active threads	*/
 	pthread_mutex_t	thr_mutex;	/* Protects (max|num)_threads	*/
 	pthread_cond_t	thr_cond;
+	pthread_mutex_t	bind_mutex;	/* Protects bind operations	*/
 
 	mg_spcb_t	ssl_password_callback;
 	mg_callback_t	log_callback;
@@ -730,22 +731,28 @@ match_regex(const char *uri, const char *regexp)
 }
 
 static const struct callback *
-find_callback(const struct mg_context *ctx, bool_t is_auth,
+find_callback(struct mg_context *ctx, bool_t is_auth,
 		const char *uri, int status_code)
 {
-	const struct callback	*cb;
+	const struct callback	*cb, *found;
 	int			i;
 
+	found = NULL;
+	pthread_mutex_lock(&ctx->bind_mutex);
 	for (i = 0; i < ctx->num_callbacks; i++) {
 		cb = ctx->callbacks + i;
 		if ((uri != NULL && cb->uri_regex != NULL &&
 		    ((is_auth && cb->is_auth) || (!is_auth && !cb->is_auth)) &&
 		    match_regex(uri, cb->uri_regex)) || (uri == NULL &&
-		     (cb->status_code == 0 || cb->status_code == status_code)))
-			return (cb);
+		     (cb->status_code == 0 ||
+		      cb->status_code == status_code))) {
+			found = cb;
+			break;
+		}
 	}
+	pthread_mutex_unlock(&ctx->bind_mutex);
 
-	return (NULL);
+	return (found);
 }
 
 /*
@@ -1072,7 +1079,7 @@ mg_close(int fd)
 	return (CloseHandle((HANDLE) fd) == 0 ? -1 : 0)
 }
 
-static int 
+static int
 rename(const char* oldname, const char* newname)
 {
 	wchar_t	woldbuf[FILENAME_MAX];
@@ -3006,6 +3013,7 @@ mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
 	if (ctx->num_callbacks >= (int) ARRAY_SIZE(ctx->callbacks) - 1) {
 		cry(fc(ctx), "Too many callbacks! Increase MAX_CALLBACKS.");
 	} else {
+		pthread_mutex_lock(&ctx->bind_mutex);
 		cb = &ctx->callbacks[ctx->num_callbacks];
 		cb->uri_regex = uri_regex ? mg_strdup(uri_regex) : NULL;
 		cb->func = func;
@@ -3013,6 +3021,7 @@ mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
 		cb->status_code = status_code;
 		cb->user_data = user_data;
 		ctx->num_callbacks++;
+		pthread_mutex_unlock(&ctx->bind_mutex);
 		DEBUG_TRACE("%s: uri %s code %d\n",
 		    __func__, uri_regex ? uri_regex : "NULL", status_code);
 	}
@@ -3933,6 +3942,7 @@ mg_fini(struct mg_context *ctx)
 		(void) pthread_mutex_destroy(&ctx->opt_mutex[i]);
 
 	(void) pthread_mutex_destroy(&ctx->thr_mutex);
+	(void) pthread_mutex_destroy(&ctx->bind_mutex);
 	(void) pthread_cond_destroy(&ctx->thr_cond);
 
 	/* Signal mg_stop() that we're done */
@@ -4690,6 +4700,7 @@ mg_start(void)
 		(void) pthread_mutex_init(&ctx->opt_mutex[i], NULL);
 
 	(void) pthread_mutex_init(&ctx->thr_mutex, NULL);
+	(void) pthread_mutex_init(&ctx->bind_mutex, NULL);
 	(void) pthread_cond_init(&ctx->thr_cond, NULL);
 
 	/* Start master (listening) thread */
