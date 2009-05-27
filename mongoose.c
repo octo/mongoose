@@ -105,7 +105,7 @@
 #define	dlopen(x,y)		LoadLibrary(x)
 #define	dlsym(x,y)		GetProcAddress((HINSTANCE) (x), (y))
 #define	access(x, y)		_access(x, y)
-#define	getcwd(x, y)		_getcwd(x, y)
+#define	getcwd(x, y)		mg_getcwd(x, y)
 #define	write(x, y, z)		_write(x, y, (unsigned) z)
 #define	read(x, y, z)		_read(x, y, (unsigned) z)
 #define	open(x, y, z)		_open(x, y, z)
@@ -1128,25 +1128,6 @@ mg_stat(const char *path, struct mgstat *stp)
 
 	return (ok);
 }
-
-static char *
-getcwd(char *buf, int nLen)
-{
-	wchar_t		wbuf[FILENAME_MAX];
-
-	if (GetModuleFileNameW(NULL, wbuf, FILENAME_MAX)) {
-		wchar_t *startModuleName = wcsrchr(wbuf, DIRSEP);
-		if (startModuleName != NULL) {
-			*startModuleName = L'\0';
-			if (WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, buf,
-			    nLen, NULL, NULL) > 0) {
-				return buf;
-			}
-		}
-	}
-
-	return (NULL);
-}
 #else
 static int
 mg_open(const char *path, int flags, int mode)
@@ -1203,6 +1184,23 @@ mg_mkdir(const char *path, int mode)
 	return (CreateDirectoryW(wbuf, NULL) ? 0 : -1);
 }
 #endif /* _WIN32_WCE */
+
+static char *
+mg_getcwd(char *buf, int buf_len)
+{
+	wchar_t		wbuf[FILENAME_MAX], *basename;
+
+	if (GetModuleFileNameW(NULL, wbuf, ARRAY_SIZE(wbuf))) {
+		if ((basename = wcsrchr(wbuf, DIRSEP)) != NULL) {
+			*basename = L'\0';
+			if (WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, buf,
+			    buf_len, NULL, NULL) > 0)
+				return (buf);
+		}
+	}
+
+	return (NULL);
+}
 
 /*
  * Implementation of POSIX opendir/closedir/readdir for Windows.
