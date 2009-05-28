@@ -5,7 +5,7 @@
 # built and present in the current (or system library) directory
 
 import mongoose
-import time
+import sys
 
 # This function is a "/foo" URI handler: it will be called each time
 # HTTP request to http://this_machine:8080/foo made.
@@ -31,8 +31,8 @@ def error_404_handler(conn, info, data):
 server = mongoose.Mongoose(root='/tmp', ports='8080')
 
 # Register custom URI and 404 error handler
-server.bind_to_uri('/foo', uri_handler, 0)
-server.bind_to_error_code(404, error_404_handler, 0)
+server.set_uri_callback('/foo', uri_handler, 0)
+server.set_error_callback(404, error_404_handler, 0)
 
 # Any option may be set later on by setting an attribute of the  server object
 server.ports = '8080,8081'   # Listen on port 8081 in addition to 8080
@@ -41,8 +41,8 @@ server.ports = '8080,8081'   # Listen on port 8081 in addition to 8080
 print 'Starting Mongoose %s on port(s) %s ' % (server.version, server.ports)
 print 'CGI extensions: %s' % server.cgi_ext
 
-# Serve connections for 5 minutes and then exit
-time.sleep(5 * 60)
+# Serve connections until 'enter' key is pressed on a console
+sys.stdin.read(1)
 
 # Deleting server object stops all serving threads
 print 'Stopping server.'

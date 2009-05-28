@@ -140,31 +140,42 @@ class Mongoose(object):
 		"""Destructor, stop Mongoose instance."""
 		self.dll.mg_stop(self.ctx)
 
-	def _bind(self, what, callback, data, func_name):
-		"""Register URI, error or auth callback."""
+	def _make_c_callback(self, python_callback):
+		"""Return C callback from given Python callback."""
 
 		# Create a closure that will be called by the  shared library.
-		def _cb(connection, request_info, data):
+		def _cb(connection, request_info, user_data):
 			# Wrap connection pointer into the connection
-			# object and call user specified function.
+			# object and call Python callback
 			conn = Connection(self, connection)
-			callback(conn, request_info.contents, data)
+			python_callback(conn, request_info.contents, user_data)
 
-		cb = ctypes.CFUNCTYPE(ctypes.c_voidp, ctypes.c_voidp,
+		# Convert the closure into C callable object
+		c_callback = ctypes.CFUNCTYPE(ctypes.c_voidp, ctypes.c_voidp,
 			ctypes.POINTER(mg_request_info), ctypes.c_voidp)(_cb)
 
 		# Store created callback in the list, so it is kept alive
 		# during context lifetime. Otherwise, python can garbage
 		# collect it, and C code will crash trying to call it.
-		self.callbacks.append(cb)
+		self.callbacks.append(c_callback)
 
-		self.dll[func_name](self.ctx, what, cb, data)
+		return c_callback
 
-	def bind_to_uri(self, uri_regex, callback, data):
-		self._bind(uri_regex, callback, data, 'mg_bind_to_uri')
+	def set_uri_callback(self, uri_regex, python_callback, user_data):
+		c_callback = self._make_c_callback(python_callback)
+		self.dll.mg_set_uri_callback(self.ctx, uri_regex,
+				c_callback, user_data)
 
-	def bind_protect_uri(self, uri_regex, callback, data):
-		self._bind(uri_regex, callback, data, 'mg_protect_uri')
+	def set_auth_callback(self, uri_regex, python_callback, user_data):
+		c_callback = self._make_c_callback(python_callback)
+		self.dll.mg_set_auth_callback(self.ctx, uri_regex,
+				c_callback, user_data)
 
-	def bind_to_error_code(self, error_code, callback, data):
-		self._bind(error_code, callback, data, 'mg_bind_to_error_code')
+	def set_error_callback(self, error_code, python_callback, user_data):
+		c_callback = self._make_c_callback(python_callback)
+		self.dll.mg_set_error_callback(self.ctx, error_code,
+				c_callback, user_data)
+	
+	def set_log_callback(self, python_callback):
+		c_callback = self._make_c_callback(python_callback, None)
+		self.dll.mg_set_log_callback(self.ctx, c_callback)

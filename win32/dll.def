@@ -4,9 +4,9 @@ EXPORTS
 	mg_stop
 	mg_get_option
 	mg_set_option
-	mg_bind_to_uri
-	mg_bind_to_error_code
-	mg_protect_uri
+	mg_set_uri_callback
+	mg_set_error_callback
+	mg_set_auth_callback
 	mg_set_ssl_password_callback
 	mg_set_log_callback
 	mg_write

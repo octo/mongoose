@@ -60,7 +60,7 @@ public class Mongoose {
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern string	mg_version();
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern int	mg_set_option(IntPtr ctx, string name, string value);
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern string	mg_get_option(IntPtr ctx, string name);
-	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern void	mg_bind_to_uri(IntPtr ctx, string uri_regex, MulticastDelegate func, IntPtr data);
+	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern void	mg_set_uri_callback(IntPtr ctx, string uri_regex, MulticastDelegate func, IntPtr data);
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern void	mg_set_log_callback(IntPtr ctx, MulticastDelegate func);
 
 	public Mongoose() {
@@ -81,14 +81,14 @@ public class Mongoose {
 		return mg_get_option(this.ctx, option_name);
 	}
 
-	public void bind_to_uri(string uri_regex, MongooseCallback func) {
+	public void set_uri_callback(string uri_regex, MongooseCallback func) {
 		// Build a closure around user function. Initialize connection object there which wraps
 		// mg_write() and other useful methods, and then call user specified handler.
 		MongooseCallback2 callback = delegate(IntPtr conn, ref MongooseRequestInfo ri, IntPtr user_data) {
 			MongooseConnection connection = new MongooseConnection(conn, this);
 			func(connection, ri);
 		};
-		mg_bind_to_uri(this.ctx, uri_regex, callback, IntPtr.Zero);
+		mg_set_uri_callback(this.ctx, uri_regex, callback, IntPtr.Zero);
 	}
 	
 	public void set_log_callback(MongooseCallback func) {

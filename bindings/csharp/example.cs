@@ -21,7 +21,7 @@ public class Program {
 		// Set options and /foo URI handler
 		web_server.set_option("ports", "8080");
 		web_server.set_option("root", "c:\\");
-		web_server.bind_to_uri("/foo", new MongooseCallback(UriHandler));
+		web_server.set_uri_callback("/foo", new MongooseCallback(UriHandler));
 
 		// Serve requests until user presses "enter" on a keyboard
 		Console.ReadLine();
