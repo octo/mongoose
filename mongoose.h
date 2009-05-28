@@ -32,6 +32,15 @@ extern "C" {
 struct mg_context;	/* Handle for the HTTP service itself	*/
 struct mg_connection;	/* Handle for the individual connection	*/
 
+
+/*
+ * User-defined callback function prototype for URI handling, error handling,
+ * or logging server messages.
+ */
+typedef void (*mg_callback_t)(struct mg_connection *,
+		const struct mg_request_info *info, void *user_data);
+
+
 /*
  * This structure contains full information about the HTTP request.
  * It is passed to the user-specified callback function as a parameter.
@@ -54,6 +63,7 @@ struct mg_request_info {
 		char	*value;		/* HTTP header value	*/
 	} http_headers[64];		/* Maximum 64 headers	*/
 };
+
 
 /*
  * Start the web server.
@@ -108,14 +118,6 @@ int mg_set_option(struct mg_context *, const char *opt_name, const char *value);
  */
 int mg_modify_passwords_file(struct mg_context *ctx, const char *file_name,
 		const char *user_name, const char *password);
-
-
-/*
- * User-defined callback function prototype for URI handling, error handling,
- * or logging server messages.
- */
-typedef void (*mg_callback_t)(struct mg_connection *,
-		const struct mg_request_info *info, void *user_data);
 
 
 /*
