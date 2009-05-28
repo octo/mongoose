@@ -162,20 +162,17 @@ class Mongoose(object):
 		return c_callback
 
 	def set_uri_callback(self, uri_regex, python_callback, user_data):
-		c_callback = self._make_c_callback(python_callback)
 		self.dll.mg_set_uri_callback(self.ctx, uri_regex,
-				c_callback, user_data)
+			self._make_c_callback(python_callback), user_data)
 
 	def set_auth_callback(self, uri_regex, python_callback, user_data):
-		c_callback = self._make_c_callback(python_callback)
 		self.dll.mg_set_auth_callback(self.ctx, uri_regex,
-				c_callback, user_data)
+			self._make_c_callback(python_callback), user_data)
 
 	def set_error_callback(self, error_code, python_callback, user_data):
-		c_callback = self._make_c_callback(python_callback)
 		self.dll.mg_set_error_callback(self.ctx, error_code,
-				c_callback, user_data)
+			self._make_c_callback(python_callback), user_data)
 	
 	def set_log_callback(self, python_callback):
-		c_callback = self._make_c_callback(python_callback, None)
-		self.dll.mg_set_log_callback(self.ctx, c_callback)
+		self.dll.mg_set_log_callback(self.ctx,
+			self._make_c_callback(python_callback))
