@@ -34,14 +34,6 @@ struct mg_connection;	/* Handle for the individual connection	*/
 
 
 /*
- * User-defined callback function prototype for URI handling, error handling,
- * or logging server messages.
- */
-typedef void (*mg_callback_t)(struct mg_connection *,
-		const struct mg_request_info *info, void *user_data);
-
-
-/*
  * This structure contains full information about the HTTP request.
  * It is passed to the user-specified callback function as a parameter.
  */
@@ -63,6 +55,14 @@ struct mg_request_info {
 		char	*value;		/* HTTP header value	*/
 	} http_headers[64];		/* Maximum 64 headers	*/
 };
+
+
+/*
+ * User-defined callback function prototype for URI handling, error handling,
+ * or logging server messages.
+ */
+typedef void (*mg_callback_t)(struct mg_connection *,
+		const struct mg_request_info *info, void *user_data);
 
 
 /*
