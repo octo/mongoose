@@ -3005,15 +3005,39 @@ substitute_index_file(struct mg_connection *conn,
 }
 
 static void
-mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
+remove_callback(struct mg_context *ctx,
+		const char *uri_regex, int status_code, bool_t is_auth)
+{
+	struct callback	*cb;
+	int		i;
+
+	for (i = 0; i < ctx->num_callbacks; i++) {
+		cb = ctx->callbacks + i;
+		if ((uri_regex != NULL && cb->uri_regex != NULL &&
+		    ((is_auth && cb->is_auth) || (!is_auth && !cb->is_auth)) &&
+		    !strcmp(uri_regex, cb->uri_regex)) || (uri_regex == NULL &&
+		     (cb->status_code == 0 ||
+		      cb->status_code == status_code))) {
+			(void) memmove(cb, cb + 1,
+			    (char *) (ctx->callbacks + ctx->num_callbacks) -
+			    (char *) (cb + 1));
+			break;
+		}
+	}
+}
+
+static void
+add_callback(struct mg_context *ctx, const char *uri_regex, int status_code,
 		mg_callback_t func, bool_t is_auth, void *user_data)
 {
 	struct callback	*cb;
 
-	if (ctx->num_callbacks >= (int) ARRAY_SIZE(ctx->callbacks) - 1) {
+	pthread_mutex_lock(&ctx->bind_mutex);
+	if (func == NULL) {
+		remove_callback(ctx, uri_regex, status_code, is_auth);
+	} else if (ctx->num_callbacks >= (int) ARRAY_SIZE(ctx->callbacks) - 1) {
 		cry(fc(ctx), "Too many callbacks! Increase MAX_CALLBACKS.");
 	} else {
-		pthread_mutex_lock(&ctx->bind_mutex);
 		cb = &ctx->callbacks[ctx->num_callbacks];
 		cb->uri_regex = uri_regex ? mg_strdup(uri_regex) : NULL;
 		cb->func = func;
@@ -3021,19 +3045,18 @@ mg_bind(struct mg_context *ctx, const char *uri_regex, int status_code,
 		cb->status_code = status_code;
 		cb->user_data = user_data;
 		ctx->num_callbacks++;
-		pthread_mutex_unlock(&ctx->bind_mutex);
 		DEBUG_TRACE("%s: uri %s code %d\n",
 		    __func__, uri_regex ? uri_regex : "NULL", status_code);
 	}
+	pthread_mutex_unlock(&ctx->bind_mutex);
 }
 
 void
 mg_set_uri_callback(struct mg_context *ctx, const char *uri_regex,
 		mg_callback_t func, void *user_data)
 {
-	assert(func != NULL);
 	assert(uri_regex != NULL);
-	mg_bind(ctx, uri_regex, -1, func, FALSE, user_data);
+	add_callback(ctx, uri_regex, -1, func, FALSE, user_data);
 }
 
 void
@@ -3041,17 +3064,15 @@ mg_set_error_callback(struct mg_context *ctx, int error_code,
 		mg_callback_t func, void *user_data)
 {
 	assert(error_code >= 0 && error_code < 1000);
-	assert(func != NULL);
-	mg_bind(ctx, NULL, error_code, func, FALSE, user_data);
+	add_callback(ctx, NULL, error_code, func, FALSE, user_data);
 }
 
 void
 mg_set_auth_callback(struct mg_context *ctx, const char *uri_regex,
 		mg_callback_t func, void *user_data)
 {
-	assert(func != NULL);
 	assert(uri_regex != NULL);
-	mg_bind(ctx, uri_regex, -1, func, TRUE, user_data);
+	add_callback(ctx, uri_regex, -1, func, TRUE, user_data);
 }
 
 /*

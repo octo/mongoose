@@ -43,7 +43,9 @@ sub fail {
 }
 
 sub get_num_of_log_entries {
-	open FD, "access.log"; my @logs = (<FD>); close FD;
+	open FD, "access.log" or return 0;
+	my @logs = (<FD>);
+	close FD;
 	return scalar @logs;
 }
 
@@ -450,6 +452,12 @@ sub do_embedded_test {
 #		'401 Unauthorized', 'mg_protect_uri (bill)', 0);
 #	o("GET /foo/secret HTTP/1.0\nAuthorization: Digest username=joe\n\n",
 #		'200 OK', 'mg_protect_uri (joe)', 0);
+
+	# Test un-binding the URI
+	o("GET /foo/bar HTTP/1.0\n\n", 'HTTP/1.1 200 OK', '/foo bound', 0);
+	o("GET /test_remove_callback HTTP/1.0\n\n",
+			'Removing callbacks', 'Callback removal', 0);
+	o("GET /foo/bar HTTP/1.0\n\n", 'HTTP/1.1 404', '/foo unbound', 0);
 
 	kill_spawned_child();
 }
