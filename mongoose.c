@@ -3531,7 +3531,6 @@ do_ssi_include(struct mg_connection *conn, const char *ssi, char *tag,
 		set_close_on_exec(fileno(fp));
 		if (match_extension(path,
 		    conn->ctx->options[OPT_SSI_EXTENSIONS])) {
-			cry(conn, "WOOOOO");
 			send_ssi_file(conn, path, fp, include_level + 1);
 		} else {
 			send_opened_file_stream(conn, fileno(fp), ~0ULL);
