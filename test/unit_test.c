@@ -3,15 +3,16 @@
 static void
 fail(const char *fmt, ...)
 {
+	FILE	*fp = stdout;
 	va_list	ap;
 
-	(void) fprintf(stderr, "%s", "Unit test: ");
+	(void) fprintf(fp, "%s", "Unit test: ");
 
 	va_start(ap, fmt);
-	(void) vfprintf(stderr, fmt, ap);
+	(void) vfprintf(fp, fmt, ap);
 	va_end(ap);
 
-	fputc('\n', stderr);
+	fputc('\n', fp);
 
 	exit(EXIT_FAILURE);
 
@@ -73,25 +74,25 @@ test_make_path(void)
 		{"/xyz", "/x/=/y", "/", SLASH SLASH "xyz"},
 		{"/xyz", "/x/=/y", "/boo", SLASH "boo" SLASH "xyz"},
 		{"/", "/x=/y", "/foo", SLASH "foo" SLASH},
-		{"/x/y/z", "/a=/b,,/x=/y,/c=/d", "/foo",
+		{"/x/y/z", "/a=/b,/x=/y,/c=/d", "/foo",
 			SLASH "y" SLASH "y" SLASH "z"},
 		{NULL, NULL, NULL, NULL},
 	};
+
 	char		buf[FILENAME_MAX];
 	int		i;
-	struct mg_context	fake_context;
+	struct mg_context	*ctx;
 
-	/* make_path() locks the options mutex, so initialize it before */
-	pthread_mutex_init(&fake_context.opt_mutex[OPT_ROOT], NULL);
-	pthread_mutex_init(&fake_context.opt_mutex[OPT_ALIASES], NULL);
+	ctx = mg_start();
 
 	/* Loop through all URIs, making paths and comparing with expected. */
 	for (i = 0; tests[i].uri != NULL; i++) {
-		fake_context.options[OPT_ROOT] = tests[i].root;
-		fake_context.options[OPT_ALIASES] = tests[i].aliases;
+		(void) mg_set_option(ctx, "root", tests[i].root);
+		(void) mg_set_option(ctx, "aliases", tests[i].aliases);
 
 		/* Convert URI to the full file name */
-		make_path(fc(&fake_context), tests[i].uri, buf, sizeof(buf));
+		convert_uri_to_file_name(fc(ctx),
+				tests[i].uri, buf, sizeof(buf));
 
 		/* Fail if the result is not what we expect */
 		if (strcmp(buf, tests[i].result) != 0)
@@ -99,9 +100,36 @@ test_make_path(void)
 			    __func__, tests[i].uri, tests[i].result, buf);
 	}
 
-	/* Cleanup - destroy the mutex */
-	pthread_mutex_destroy(&fake_context.opt_mutex[OPT_ROOT]);
-	pthread_mutex_destroy(&fake_context.opt_mutex[OPT_ALIASES]);
+	mg_stop(ctx);
+}
+
+static void
+test_set_option(void)
+{
+	struct {
+		const char	*opt_name;	/* Option name		*/
+		const char	*opt_value;	/* Option value		*/
+		int result;			/* Expected result	*/
+	} tests[] = {
+		{"aliases", "a,b,c", 0},	/* Zero length value	*/
+		{"aliases", "a=,b=c,c=d", 0},	/* Zero length value	*/
+		{"aliases", "=a,b=c,c=d", 0},	/* Zero length key	*/
+		{"aliases", "a=b,b=c,c=d", 1},	/* OK */
+		{"not_existent_option", "", -1}, /* Unknown option */
+		{NULL, NULL, 0}
+	};
+
+	struct mg_context	*ctx;
+	int			i;
+
+	ctx = mg_start();
+	for (i = 0; tests[i].opt_name != NULL; i++) {
+		if (mg_set_option(ctx, tests[i].opt_name,
+		    tests[i].opt_value) != tests[i].result)
+			fail("%s: mg_set_option(%s): failed expectation",
+			    __func__, tests[i].opt_name);
+	}
+	mg_stop(ctx);
 }
 
 int main(int argc, char *argv[])
@@ -109,6 +137,7 @@ int main(int argc, char *argv[])
 	test_get_var();
 	test_fix_directory_separators();
 	test_make_path();
+	test_set_option();
 
 	return (EXIT_SUCCESS);
 }
