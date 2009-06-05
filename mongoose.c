@@ -338,6 +338,15 @@ struct usa {
 };
 
 /*
+ * Specifies a string (chunk of memory).
+ * Used to traverse comma separated lists of options.
+ */
+struct vec {
+	const char	*ptr;
+	size_t		len;
+};
+
+/*
  * Structure used by mg_stat() function. Uses 64 bit file length.
  */
 struct mgstat {
@@ -433,21 +442,6 @@ struct mg_connection {
 	bool_t		embedded_auth;	/* Used for authorization	*/
 	uint64_t	num_bytes_sent;	/* Total bytes sent to client	*/
 };
-
-/*
- * In Mongoose, list of values are represented as comma separated
- * string. For example, list of CGI extensions can be represented as
- * ".cgi,.php,.pl", FOR_EACH_WORD_IN_LIST macro allows to
- * loop through the individual values in that list.
- *
- * A "const char *" and "int" variables must be passed to the macro.
- *
- * In every iteration of the loop, "s" points to the current value, and
- * "len" specifies its length. Code inside loop must not change "s" and "len".
- */
-#define	FOR_EACH_WORD_IN_LIST(s, len)					\
-	for (; s != NULL && (len = strcspn(s, ",")) != 0;		\
-			s += len, s+= strspn(s, ","))
 
 /*
  * Print error message to the opened error log stream.
@@ -635,11 +629,11 @@ mg_snprintf(struct mg_connection *conn,
 static bool_t
 is_true(const char *str)
 {
-	static const char *trues[] = {"1", "yes", "true", "jawohl", NULL};
-	const char	**p;
+	static const char	*trues[] = {"1", "yes", "true", "ja", NULL};
+	int			i;
 
-	for (p = trues; *p != NULL; p++)
-		if (str && !mg_strcasecmp(str, *p))
+	for (i = 0; trues[i] != NULL; i++)
+		if (str != NULL && mg_strcasecmp(str, trues[i]) == 0)
 			return (TRUE);
 
 	return (FALSE);
@@ -688,6 +682,50 @@ mg_get_header(const struct mg_connection *conn, const char *name)
 	return (get_header(&conn->request_info, name));
 }
 
+/*
+ * A helper function for traversing comma separated list of values.
+ * It returns a list pointer shifted to the next value, of NULL if the end
+ * of the list found.
+ * Value is stored in val vector. If value has form "x=y", then eq_val
+ * vector is initialized to point to the "y" part, and val vector length
+ * is adjusted to point only to "x".
+ */
+static const char *
+next_option(const char *list, struct vec *val, struct vec *eq_val)
+{
+	if (list == NULL || *list == '\0') {
+		/* End of the list */
+		list = NULL;
+	} else {
+		val->ptr = list;
+		if ((list = strchr(val->ptr, ',')) != NULL) {
+			/* Comma found. Store length and shift the list ptr */
+			val->len = list - val->ptr;
+			list++;
+		} else {
+			/* This value is the last one */
+			list = val->ptr + strlen(val->ptr);
+			val->len = list - val->ptr;
+		}
+
+		if (eq_val != NULL) {
+			/*
+			 * Value has form "x=y", adjust pointers and lengths
+			 * so that val points to "x", and eq_val points to "y".
+			 */
+			eq_val->len = 0;
+			eq_val->ptr = memchr(val->ptr, '=', val->len);
+			if (eq_val->ptr != NULL) {
+				eq_val->ptr++;  /* Skip over '=' character */
+				eq_val->len = val->ptr + val->len - eq_val->ptr;
+				val->len = (eq_val->ptr - val->ptr) - 1;
+			}
+		}
+	}
+
+	return (list);
+}
+
 #if !(defined(NO_CGI) && defined(NO_SSI))
 /*
  * Verify that given file has certain extension
@@ -695,13 +733,15 @@ mg_get_header(const struct mg_connection *conn, const char *name)
 static bool_t
 match_extension(const char *path, const char *ext_list)
 {
-	size_t		len, path_len;
+	struct vec	ext_vec;
+	size_t		path_len;
 
 	path_len = strlen(path);
 
-	FOR_EACH_WORD_IN_LIST(ext_list, len)
-		if (len < path_len && path[path_len - (len + 1)] == '.' &&
-		    !mg_strncasecmp(path + path_len - len, ext_list, len))
+	while ((ext_list = next_option(ext_list, &ext_vec, NULL)) != NULL)
+		if (ext_vec.len < path_len &&
+		    mg_strncasecmp(path + path_len - ext_vec.len,
+			    ext_vec.ptr, ext_vec.len) == 0)
 			return (TRUE);
 
 	return (FALSE);
@@ -1730,12 +1770,12 @@ mg_get_var(const struct mg_connection *conn, const char *name)
  * Transform URI to the file name.
  */
 static void
-make_path(struct mg_connection *conn, const char *uri,
+convert_uri_to_file_name(struct mg_connection *conn, const char *uri,
 		char *buf, size_t buf_len)
 {
 	struct mg_context	*ctx = conn->ctx;
-	char			*p, *s;
-	size_t			len;
+	struct vec		uri_vec, path_vec;
+	const char		*list;
 
 	lock_option(ctx, OPT_ROOT);
 	mg_snprintf(conn, buf, buf_len, "%s%s", ctx->options[OPT_ROOT], uri);
@@ -1743,25 +1783,19 @@ make_path(struct mg_connection *conn, const char *uri,
 
 	/* If requested URI has aliased prefix, use alternate root */
 	lock_option(ctx, OPT_ALIASES);
-	s = ctx->options[OPT_ALIASES];
-	FOR_EACH_WORD_IN_LIST(s, len) {
+	list = ctx->options[OPT_ALIASES];
 
-		p = (char *) memchr(s, '=', len);
-		if (p == NULL || p >= s + len || p == s)
-			continue;
-
-		if (memcmp(uri, s, p - s) == 0) {
+	while ((list = next_option(list, &uri_vec, &path_vec)) != NULL) {
+		if (memcmp(uri, uri_vec.ptr, uri_vec.len) == 0) {
 			(void) mg_snprintf(conn, buf, buf_len, "%.*s%s",
-			    (s + len) - p - 1, p + 1, uri + (p - s));
+			    path_vec.len, path_vec.ptr, uri + uri_vec.len);
 			break;
 		}
 	}
 	unlock_option(ctx, OPT_ALIASES);
 
 #ifdef _WIN32
-	for (p = buf; *p != '\0'; p++)
-		if (*p == '/')
-			*p = DIRSEP;
+	fix_directory_separators(buf);
 #endif /* _WIN32 */
 }
 
@@ -1902,7 +1936,7 @@ date_to_epoch(const char *s)
  * excessive '/' and '\' characters
  */
 static void
-normalize_uri(char *s)
+remove_double_dots_and_double_slashes(char *s)
 {
 	char	*p = s;
 
@@ -1969,12 +2003,16 @@ static const struct {
 	{NULL,		0,	NULL,				0}
 };
 
+/*
+ * Look at the "path" extension and figure what mime type it has.
+ * Store mime type in the vector.
+ */
 static void
-get_mime_type(struct mg_context *ctx, const char *path,
-		const char **mime_type, int *mime_type_len)
+get_mime_type(struct mg_context *ctx, const char *path, struct vec *vec)
 {
-	size_t		path_len, len, i;
-	const char	*s, *p, *ext;
+	struct vec	ext_vec, mime_vec;
+	const char	*list, *ext;
+	size_t		i, path_len;
 
 	path_len = strlen(path);
 
@@ -1983,17 +2021,12 @@ get_mime_type(struct mg_context *ctx, const char *path,
 	 * override default mime types.
 	 */
 	lock_option(ctx, OPT_MIME_TYPES);
-	s = ctx->options[OPT_MIME_TYPES];
-	FOR_EACH_WORD_IN_LIST(s, len) {
-		p = (const char *) memchr(s, '=', len);
-		if (p == NULL || p >= s + len || p == s)
-			continue;
-
-		ext = path + (path_len - (p - s));
-
-		if (mg_strncasecmp(ext, s, p - s) == 0) {
-			*mime_type = p + 1;
-			*mime_type_len = len - (*mime_type - s);
+	list = ctx->options[OPT_MIME_TYPES];
+	while ((list = next_option(list, &ext_vec, &mime_vec)) != NULL) {
+		/* ext now points to the path suffix */
+		ext = path + path_len - ext_vec.len;
+		if (mg_strncasecmp(ext, ext_vec.ptr, ext_vec.len) == 0) {
+			*vec = mime_vec;
 			unlock_option(ctx, OPT_MIME_TYPES);
 			return;
 		}
@@ -2005,15 +2038,15 @@ get_mime_type(struct mg_context *ctx, const char *path,
 		ext = path + (path_len - mime_types[i].ext_len);
 		if (path_len > mime_types[i].ext_len &&
 		    mg_strcasecmp(ext, mime_types[i].extension) == 0) {
-			*mime_type = mime_types[i].mime_type;
-			*mime_type_len = mime_types[i].mime_type_len;
+			vec->ptr = mime_types[i].mime_type;
+			vec->len = mime_types[i].mime_type_len;
 			return;
 		}
 	}
 
 	/* Nothing found. Fall back to text/plain */
-	*mime_type = "text/plain";
-	*mime_type_len = 10;
+	vec->ptr = "text/plain";
+	vec->len = 10;
 }
 
 #if !defined(NO_AUTH)
@@ -2467,33 +2500,23 @@ static bool_t
 check_authorization(struct mg_connection *conn, const char *path)
 {
 	FILE		*fp;
-	size_t		len, n;
-	char		protected_path[FILENAME_MAX];
-	const char	*p, *s;
+	char		fname[FILENAME_MAX];
+	struct vec	uri_vec, filename_vec;
+	const char	*list;
 	bool_t		authorized;
 
 	fp = NULL;
 	authorized = TRUE;
 
 	lock_option(conn->ctx, OPT_PROTECT);
-	s = conn->ctx->options[OPT_PROTECT];
-	FOR_EACH_WORD_IN_LIST(s, len) {
-
-		p = (const char *) memchr(s, '=', len);
-		if (p == NULL || p >= s + len || p == s)
-			continue;
-
-		if (!memcmp(conn->request_info.uri, s, p - s)) {
-
-			n = (size_t) (s + len - p);
-			if (n > sizeof(protected_path) - 1)
-				n = sizeof(protected_path) - 1;
-
-			mg_strlcpy(protected_path, p + 1, n);
-
-			if ((fp = fopen(protected_path, "r")) == NULL)
+	list = conn->ctx->options[OPT_PROTECT];
+	while ((list = next_option(list, &uri_vec, &filename_vec)) != NULL) {
+		if (!memcmp(conn->request_info.uri, uri_vec.ptr, uri_vec.len)) {
+			(void) mg_snprintf(conn, fname, sizeof(fname), "%.*s",
+			    filename_vec.len, filename_vec.ptr);
+			if ((fp = fopen(fname, "r")) == NULL)
 				cry(conn, "%s: cannot open %s: %s",
-				    __func__, protected_path, strerror(errno));
+				    __func__, fname, strerror(errno));
 			break;
 		}
 	}
@@ -2808,13 +2831,13 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	struct tm tm;
 #endif /* _WIN32_WCE */
 	char		date[64], lm[64], etag[64], range[64];
-	const char	*fmt = "%a, %d %b %Y %H:%M:%S %Z", *msg = "OK";
-	const char	*mime_type, *s;
+	const char	*fmt = "%a, %d %b %Y %H:%M:%S %Z", *msg = "OK", *hdr;
 	time_t		curtime = time(NULL);
 	unsigned long long	cl, r1, r2;
-	int		fd, n, mime_type_len;
+	struct vec	mime_vec;
+	int		fd, n;
 
-	get_mime_type(conn->ctx, path, &mime_type, &mime_type_len);
+	get_mime_type(conn->ctx, path, &mime_vec);
 	cl = stp->size;
 	conn->request_info.status_code = 200;
 	range[0] = '\0';
@@ -2827,9 +2850,9 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	set_close_on_exec(fd);
 
 	/* If Range: header specified, act accordingly */
-	s = mg_get_header(conn, "Range");
 	r1 = r2 = 0;
-	if (s != NULL && (n = sscanf(s,
+	hdr = mg_get_header(conn, "Range");
+	if (hdr != NULL && (n = sscanf(hdr,
 	    "bytes=%" LONGLONG_FMT "u-%" LONGLONG_FMT "u", &r1, &r2)) > 0) {
 		conn->request_info.status_code = 206;
 		(void) lseek(fd, (long) r1, SEEK_SET);
@@ -2873,7 +2896,7 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	    "Accept-Ranges: bytes\r\n"
 	    "%s\r\n",
 	    conn->request_info.status_code, msg, date, lm, etag,
-	    mime_type_len, mime_type, cl,
+	    mime_vec.len, mime_vec.ptr, cl,
 	    conn->keep_alive ? "keep-alive" : "close", range);
 
 	if (strcmp(conn->request_info.request_method, "HEAD") != 0)
@@ -2965,32 +2988,52 @@ read_request(int fd, SOCKET sock, SSL *ssl, char *buf, int bufsiz, int *nread)
 
 /*
  * For given directory path, substitute it to valid index file.
- * Return 0 if index file has been found, -1 if not found
+ * Return 0 if index file has been found, -1 if not found.
+ * If the file is found, it's stats is returned in stp.
  */
 static bool_t
 substitute_index_file(struct mg_connection *conn,
 		char *path, size_t path_len, struct mgstat *stp)
 {
-	const char	*s;
+	const char	*list;
 	struct mgstat	st;
-	size_t		len, n;
+	struct vec	filename_vec;
+	size_t		n;
 	bool_t		found;
 
 	n = strlen(path);
-	if (n > 0 && IS_DIRSEP_CHAR(path[n - 1])) {
-		n--;
-	} else {
-		path[n] = DIRSEP;
-	}
-	found = FALSE;
 
+	/*
+	 * The 'path' given to us points to the directory. Remove all trailing
+	 * directory separator characters from the end of the path, and
+	 * then append single directory separator character.
+	 */
+	while (n > 0 && IS_DIRSEP_CHAR(path[n - 1]))
+		n--;
+	path[n] = DIRSEP;
+
+	/*
+	 * Traverse index files list. For each entry, append it to the given
+	 * path and see if the file exists. If it exists, break the loop
+	 */
 	lock_option(conn->ctx, OPT_INDEX_FILES);
-	s = conn->ctx->options[OPT_INDEX_FILES];
-	FOR_EACH_WORD_IN_LIST(s, len) {
-		if (len > path_len - n - 1)
+	list = conn->ctx->options[OPT_INDEX_FILES];
+	found = FALSE;
+	cry(conn, "%s: %s", __func__, list);
+
+	while ((list = next_option(list, &filename_vec, NULL)) != NULL) {
+
+		/* Ignore too long entries that may overflow path buffer */
+		if (filename_vec.len > path_len - n)
 			continue;
-		(void) mg_strlcpy(path + n + 1, s, len + 1);
+
+		/* Prepare full path to the index file  */
+		(void) mg_strlcpy(path + n + 1,
+		    filename_vec.ptr, filename_vec.len + 1);
+
+		/* Does it exist ? */
 		if (mg_stat(path, &st) == 0) {
+			/* Yes it does, break the loop */
 			*stp = st;
 			found = TRUE;
 			break;
@@ -2998,6 +3041,7 @@ substitute_index_file(struct mg_connection *conn,
 	}
 	unlock_option(conn->ctx, OPT_INDEX_FILES);
 
+	/* If no index file exists, restore directory path */
 	if (found == FALSE)
 		path[n] = '\0';
 
@@ -3179,6 +3223,17 @@ handle_request_body(struct mg_connection *conn, int fd)
 }
 
 #if !defined(NO_CGI)
+
+/*
+ * This structure helps to create an environment for the spawned CGI program.
+ * Environment is an array of "VARIABLE=VALUE\0" ASCIIZ strings,
+ * last element must be NULL.
+ * However, on Windows there is a requirement that all these VARIABLE=VALUE\0
+ * strings must reside in a contiguous buffer. The end of the buffer is
+ * marked by two '\0' characters.
+ * We satisfy both worlds: we create an envp array (which is vars), all
+ * entries are actually pointers inside buf.
+ */
 struct cgi_env_block {
 	struct mg_connection *conn;
 	char	buf[CGI_ENVIRONMENT_SIZE];	/* Environment buffer	*/
@@ -3187,6 +3242,10 @@ struct cgi_env_block {
 	int	nvars;				/* Number of variables	*/
 };
 
+/*
+ * Append VARIABLE=VALUE\0 string to the buffer, and add a respective
+ * pointer into the vars array.
+ */
 static char *
 addenv(struct cgi_env_block *block, const char *fmt, ...)
 {
@@ -3194,18 +3253,25 @@ addenv(struct cgi_env_block *block, const char *fmt, ...)
 	char	*added;
 	va_list	ap;
 
+	/* Calculate how much space is left in the buffer */
 	space = sizeof(block->buf) - block->len - 2;
 	assert(space >= 0);
+
+	/* Make a pointer to the free space int the buffer */
 	added = block->buf + block->len;
 
+	/* Copy VARIABLE=VALUE\0 string into the free space */
 	va_start(ap, fmt);
 	n = mg_vsnprintf(block->conn, added, (size_t) space, fmt, ap);
 	va_end(ap);
 
+	/* Make sure we do not overflow buffer and the envp array */
 	if (n > 0 && n < space &&
 	    block->nvars < (int) ARRAY_SIZE(block->vars) - 2) {
+		/* Append a pointer to the added string into the envp array */
 		block->vars[block->nvars++] = block->buf + block->len;
-		block->len += n + 1;	/* Include \0 terminator */
+		/* Bump up used length counter. Include \0 terminator */
+		block->len += n + 1;
 	}
 
 	return (added);
@@ -3216,9 +3282,9 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 		struct cgi_env_block *blk)
 {
 	const char	*s, *script_filename, *root;
+	struct vec	var_vec;
 	char		*p;
 	int		i;
-	size_t		len;
 
 	blk->len = blk->nvars = 0;
 	blk->conn = conn;
@@ -3296,12 +3362,9 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 
 	/* Add user-specified variables */
 	lock_option(conn->ctx, OPT_CGI_ENV);
-	if (conn->ctx->options[OPT_CGI_ENV] != NULL) {
-		s = conn->ctx->options[OPT_CGI_ENV];
-		FOR_EACH_WORD_IN_LIST(s, len) {
-			addenv(blk, "%.*s", len, s);
-		}
-	}
+	s = conn->ctx->options[OPT_CGI_ENV];
+	while ((s = next_option(s, &var_vec, NULL)) != NULL)
+		addenv(blk, "%.*s", var_vec.len, var_vec.ptr);
 	unlock_option(conn->ctx, OPT_CGI_ENV);
 
 	blk->vars[blk->nvars++] = NULL;
@@ -3680,8 +3743,8 @@ analyze_request(struct mg_connection *conn)
 		* conn->request_info.query_string++ = '\0';
 
 	(void) url_decode(uri, (int) strlen(uri), uri, strlen(uri) + 1, FALSE);
-	normalize_uri(uri);
-	make_path(conn, uri, path, sizeof(path));
+	remove_double_dots_and_double_slashes(uri);
+	convert_uri_to_file_name(conn, uri, path, sizeof(path));
 
 #if !defined(NO_AUTH)
 	if (!check_authorization(conn, path)) {
@@ -3768,26 +3831,26 @@ close_all_listening_sockets(struct mg_context *ctx)
 }
 
 static bool_t
-set_ports_option(struct mg_context *ctx, const char *p)
+set_ports_option(struct mg_context *ctx, const char *list)
 {
-	SOCKET	sock;
-	size_t	len;
-	int	is_ssl;
+	SOCKET		sock;
+	int		is_ssl;
+	struct vec	vec;
 
 	close_all_listening_sockets(ctx);
 	assert(ctx->num_listeners == 0);
 
-	FOR_EACH_WORD_IN_LIST(p, len) {
+	while ((list = next_option(list, &vec, NULL)) != NULL) {
 
-		is_ssl	= p[len - 1] == 's' ? TRUE : FALSE;
+		is_ssl	= vec.ptr[vec.len - 1] == 's' ? TRUE : FALSE;
 
 		if (ctx->num_listeners >=
 		    (int) (ARRAY_SIZE(ctx->listeners) - 1)) {
 			cry(fc(ctx), "%s", "Too many listeninig sockets");
 			return (FALSE);
-		} else if ((sock = mg_open_listening_port(ctx, p)) ==
+		} else if ((sock = mg_open_listening_port(ctx, vec.ptr)) ==
 		    INVALID_SOCKET) {
-			cry(fc(ctx), "cannot bind to %.*s", len, p);
+			cry(fc(ctx), "cannot bind to %.*s", vec.len, vec.ptr);
 			return (FALSE);
 		} else if (is_ssl == TRUE && ctx->ssl_ctx == NULL) {
 			(void) closesocket(sock);
@@ -3869,37 +3932,40 @@ isbyte(int n) {
  * Return -1 if ACL is malformed, 0 if address is disallowed, 1 if allowed.
  */
 static int
-check_acl(struct mg_context *ctx, const char *acl, const struct usa *usa)
+check_acl(struct mg_context *ctx, const char *list, const struct usa *usa)
 {
 	int		a, b, c, d, n, mask, allowed;
 	char		flag;
-	size_t		len;
 	uint32_t	acl_subnet, acl_mask, remote_ip;
+	struct vec	vec;
 
 	(void) memcpy(&remote_ip, &usa->u.sin.sin_addr, sizeof(remote_ip));
 
 	/* If any ACL is set, deny by default */
 	allowed = '-';
-	FOR_EACH_WORD_IN_LIST(acl, len) {
+
+	while ((list = next_option(list, &vec, NULL)) != NULL) {
 
 		mask = 32;
 
-		if (sscanf(acl, "%c%d.%d.%d.%d%n",&flag,&a,&b,&c,&d,&n) != 5) {
-			cry(fc(ctx), "%s: subnet must be [+|-]x.x.x.x[/x]",
-			    __func__);
+		if (sscanf(vec.ptr, "%c%d.%d.%d.%d%n",
+		    &flag, &a, &b, &c, &d, &n) != 5) {
+			cry(fc(ctx),
+			    "%s: subnet must be [+|-]x.x.x.x[/x]", __func__);
 			return (-1);
 		} else if (flag != '+' && flag != '-') {
 			cry(fc(ctx), "%s: flag must be + or -: [%s]",
-			    __func__, acl);
+			    __func__, vec.ptr);
 			return (-1);
 		} else if (!isbyte(a)||!isbyte(b)||!isbyte(c)||!isbyte(d)) {
-			cry(fc(ctx), "%s: bad ip address: [%s]", __func__, acl);
+			cry(fc(ctx),
+			    "%s: bad ip address: [%s]", __func__, vec.ptr);
 			return (-1);
-		} else if (sscanf(acl + n, "/%d", &mask) == 0) {
+		} else if (sscanf(vec.ptr + n, "/%d", &mask) == 0) {
 			/* Do nothing, no mask specified */
 		} else if (mask < 0 || mask > 32) {
 			cry(fc(ctx), "%s: bad subnet mask: %d [%s]",
-			    __func__, n, acl);
+			    __func__, n, vec.ptr);
 			return (-1);
 		}
 
@@ -4187,6 +4253,27 @@ set_admin_uri_option(struct mg_context *ctx, const char *uri)
 	return (TRUE);
 }
 
+/*
+ * Check if the comma-separated list of options has a format of key-value
+ * pairs: "k1=v1,k2=v2". Return FALSE if any entry has invalid key or value.
+ */
+static bool_t
+set_kv_list_option(struct mg_context *ctx, const char *str)
+{
+	const char	*list;
+	struct vec	key, value;
+
+	list = str;
+	while ((list = next_option(list, &key, &value)) != NULL)
+		if (key.len == 0 || value.len == 0) {
+			cry(fc(ctx), "Invalid list specified: [%s], "
+			    "expecting key1=value1,key2=value2,...", str);
+			return (FALSE);
+		}
+
+	return (TRUE);
+}
+
 static const struct mg_option known_options[] = {
 	{"root", "\tWeb root directory", NULL, OPT_ROOT, NULL},
 	{"index_files",	"Index files", "index.html,index.htm,index.cgi",
@@ -4195,30 +4282,39 @@ static const struct mg_option known_options[] = {
 	{"ssl_cert", "SSL certificate file", NULL,
 		OPT_SSL_CERTIFICATE, &set_ssl_option},
 #endif /* !NO_SSL */
-	{"ports", "Listening ports", NULL, OPT_PORTS, &set_ports_option},
-	{"dir_list", "Directory listing", "yes", OPT_DIR_LIST, NULL},
-	{"protect", "URI to htpasswd mapping", NULL, OPT_PROTECT, NULL},
+	{"ports", "Listening ports", NULL,
+		OPT_PORTS, &set_ports_option},
+	{"dir_list", "Directory listing", "yes",
+		OPT_DIR_LIST, NULL},
+	{"protect", "URI to htpasswd mapping", NULL,
+		OPT_PROTECT, &set_kv_list_option},
 #if !defined(NO_CGI)
-	{"cgi_ext", "CGI extensions", "cgi,pl,php", OPT_CGI_EXTENSIONS, NULL},
+	{"cgi_ext", "CGI extensions", ".cgi,.pl,.php",
+		OPT_CGI_EXTENSIONS, NULL},
 	{"cgi_interp", "CGI interpreter to use with all CGI scripts", NULL,
 		OPT_CGI_INTERPRETER, NULL},
-	{"cgi_env", "Custom CGI enviroment variables", NULL, OPT_CGI_ENV, NULL},
+	{"cgi_env", "Custom CGI enviroment variables", NULL,
+		OPT_CGI_ENV, &set_kv_list_option},
 #endif /* NO_CGI */
-	{"ssi_ext", "SSI extensions", "shtml,shtm", OPT_SSI_EXTENSIONS, NULL},
+	{"ssi_ext", "SSI extensions", ".shtml,.shtm",
+		OPT_SSI_EXTENSIONS, NULL},
 #if !defined(NO_AUTH)
 	{"auth_realm", "Authentication domain name", "mydomain.com",
 		OPT_AUTH_DOMAIN, NULL},
 	{"auth_gpass", "Global passwords file", NULL,
 		OPT_AUTH_GPASSWD, &set_gpass_option},
-	{"auth_PUT", "PUT,DELETE auth file", NULL, OPT_AUTH_PUT, NULL},
+	{"auth_PUT", "PUT,DELETE auth file", NULL,
+		OPT_AUTH_PUT, NULL},
 #endif /* !NO_AUTH */
 #if !defined(_WIN32)
 	{"uid", "\tRun as user", NULL, OPT_UID, &set_uid_option},
 #endif /* !_WIN32 */
 	{"access_log", "Access log file", NULL,
 		OPT_ACCESS_LOG, &set_alog_option},
-	{"error_log", "Error log file", NULL, OPT_ERROR_LOG, &set_elog_option},
-	{"aliases", "Path=URI mappings", NULL, OPT_ALIASES, NULL},
+	{"error_log", "Error log file", NULL,
+		OPT_ERROR_LOG, &set_elog_option},
+	{"aliases", "Path=URI mappings", NULL,
+		OPT_ALIASES, &set_kv_list_option},
 	{"admin_uri", "Administration page URI", NULL,
 		OPT_ADMIN_URI, &set_admin_uri_option},
 	{"acl", "\tAllow/deny IP addresses/subnets", NULL,
@@ -4228,7 +4324,7 @@ static const struct mg_option known_options[] = {
 	{"idle_time", "Time in seconds connection stays idle", "10",
 		OPT_IDLE_TIME, NULL},
 	{"mime_types", "Comma separated list of ext=mime_type pairs", NULL,
-		OPT_MIME_TYPES, NULL},
+		OPT_MIME_TYPES, &set_kv_list_option},
 	{NULL, NULL, NULL, 0, NULL}
 };
 
