@@ -81,7 +81,6 @@ show_usage_and_exit(void)
 	exit(EXIT_FAILURE);
 }
 
-#if !defined(NO_AUTH)
 /*
  * Edit the passwords file.
  */
@@ -99,7 +98,6 @@ mg_edit_passwords(const char *fname, const char *domain,
 
 	return (retval);
 }
-#endif /* NO_AUTH */
 
 static void
 process_command_line_arguments(struct mg_context *ctx, char *argv[])
@@ -177,13 +175,11 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 int
 main(int argc, char *argv[])
 {
-#if !defined(NO_AUTH)
 	if (argc > 1 && argv[1][0] == '-' && argv[1][1] == 'A') {
 		if (argc != 6)
 			show_usage_and_exit();
 		exit(mg_edit_passwords(argv[2], argv[3], argv[4],argv[5]));
 	}
-#endif /* NO_AUTH */
 
 	if (argc == 2 && (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help")))
 		show_usage_and_exit();

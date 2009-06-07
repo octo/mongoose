@@ -2049,7 +2049,6 @@ get_mime_type(struct mg_context *ctx, const char *path, struct vec *vec)
 	vec->len = 10;
 }
 
-#if !defined(NO_AUTH)
 #ifndef HAVE_MD5
 typedef struct MD5Context {
 	uint32_t	buf[4];
@@ -2623,7 +2622,6 @@ mg_modify_passwords_file(struct mg_context *ctx, const char *fname,
 
 	return (0);
 }
-#endif /* NO_AUTH */
 
 struct de {
 	struct mg_connection	*conn;
@@ -3487,7 +3485,6 @@ done:
 }
 #endif /* !NO_CGI */
 
-#if !defined(NO_AUTH)
 /*
  * For a given PUT path, create all intermediate subdirectories
  * for given path. Return 0 if the path itself is a directory,
@@ -3547,7 +3544,6 @@ put_file(struct mg_connection *conn, const char *path)
 		(void) close(fd);
 	}
 }
-#endif /* NO_AUTH */
 
 #if !defined(NO_SSI)
 static void send_ssi_file(struct mg_connection *, const char *, FILE *, int);
@@ -3746,12 +3742,9 @@ analyze_request(struct mg_connection *conn)
 	remove_double_dots_and_double_slashes(uri);
 	convert_uri_to_file_name(conn, uri, path, sizeof(path));
 
-#if !defined(NO_AUTH)
 	if (!check_authorization(conn, path)) {
 		send_authorization_request(conn);
-	} else
-#endif /* !NO_AUTH */
-	if (check_embedded_authorization(conn) == FALSE) {
+	} else if (check_embedded_authorization(conn) == FALSE) {
 		/*
 		 * Embedded code failed authorization. Do nothing here, since
 		 * an embedded code must handle this itself by either
@@ -3763,9 +3756,7 @@ analyze_request(struct mg_connection *conn)
 		    strcmp(ri->request_method, "PUT") != 0) ||
 		    handle_request_body(conn, -1))
 			cb->func(conn, &conn->request_info, cb->user_data);
-	} else
-#if !defined(NO_AUTH)
-	if (strstr(path, PASSWORDS_FILE_NAME)) {
+	} else if (strstr(path, PASSWORDS_FILE_NAME)) {
 		/* Do not allow to view passwords files */
 		send_error(conn, 403, "Forbidden", "Access Forbidden");
 	} else if ((!strcmp(ri->request_method, "PUT") ||
@@ -3781,9 +3772,7 @@ analyze_request(struct mg_connection *conn)
 		else
 			send_error(conn, 500, http_500_error,
 			    "remove(%s): %s", path, strerror(ERRNO));
-	} else
-#endif /* NO_AUTH */
-	if (mg_stat(path, &st) != 0) {
+	} else if (mg_stat(path, &st) != 0) {
 		send_error(conn, 404, "Not Found", "%s", "File not found");
 	} else if (st.is_directory && uri[strlen(uri) - 1] != '/') {
 		(void) mg_printf(conn,
@@ -4204,7 +4193,6 @@ set_elog_option(struct mg_context *ctx, const char *path)
 	return (open_log_file(ctx, &ctx->error_log, path));
 }
 
-#if !defined(NO_AUTH)
 static bool_t
 set_gpass_option(struct mg_context *ctx, const char *path)
 {
@@ -4227,7 +4215,6 @@ set_gpass_option(struct mg_context *ctx, const char *path)
 	}
 #endif /* _WIN32_WCE */
 }
-#endif /* !NO_AUTH */
 
 static bool_t
 set_max_threads_option(struct mg_context *ctx, const char *str)
@@ -4298,14 +4285,12 @@ static const struct mg_option known_options[] = {
 #endif /* NO_CGI */
 	{"ssi_ext", "SSI extensions", ".shtml,.shtm",
 		OPT_SSI_EXTENSIONS, NULL},
-#if !defined(NO_AUTH)
 	{"auth_realm", "Authentication domain name", "mydomain.com",
 		OPT_AUTH_DOMAIN, NULL},
 	{"auth_gpass", "Global passwords file", NULL,
 		OPT_AUTH_GPASSWD, &set_gpass_option},
 	{"auth_PUT", "PUT,DELETE auth file", NULL,
 		OPT_AUTH_PUT, NULL},
-#endif /* !NO_AUTH */
 #if !defined(_WIN32)
 	{"uid", "\tRun as user", NULL, OPT_UID, &set_uid_option},
 #endif /* !_WIN32 */
@@ -4379,9 +4364,7 @@ mg_show_usage_string(FILE *fp)
 	    "Mongoose version %s (c) Sergey Lyubka\n"
 	    "usage: mongoose [options] [config_file]\n", mg_version());
 
-#if !defined(NO_AUTH)
 	fprintf(fp, "  -A <htpasswd_file> <realm> <user> <passwd>\n");
-#endif /* NO_AUTH */
 
 	for (o = known_options; o->name != NULL; o++) {
 		(void) fprintf(fp, "  -%s\t%s", o->name, o->description);
