@@ -132,12 +132,50 @@ test_set_option(void)
 	mg_stop(ctx);
 }
 
+test_parse_http_request(void)
+{
+	struct mg_request_info	ri;
+	struct usa		usa;
+
+	char	empty[] = "";
+	char	bad1[] = "BOO / HTTP/1.0\n\n";
+	char	bad2[] = "GET / TTP/1.0\n\n";
+	char	bad3[] = "GET TTP/1.0\n\n";
+	char	bad4[] = "GET \n/ HTTP/1.0\n\n";
+	char	good[] = "GET / HTTP/1.0\n\n";
+	char	good2[] = "GET / HTTP/1.1\r\nA: b c\nB: c d\r\nC:  \r\n\n";
+
+	if (parse_http_request(empty, &ri, &usa) != FALSE)
+		fail("%s: empty request", __func__);
+
+	if (parse_http_request(bad1, &ri, &usa) != FALSE ||
+	    parse_http_request(bad2, &ri, &usa) != FALSE ||
+	    parse_http_request(bad3, &ri, &usa) != FALSE ||
+	    parse_http_request(bad4, &ri, &usa) != FALSE)
+		fail("%s: bad request parsed successfully", __func__);
+
+	if (parse_http_request(good, &ri, &usa) != TRUE)
+		fail("%s: good request", __func__);
+
+	if (parse_http_request(good2, &ri, &usa) != TRUE ||
+	    ri.num_headers != 3 ||
+	    strcmp(ri.http_headers[0].name, "A") != 0 ||
+	    strcmp(ri.http_headers[0].value, "b c") != 0 ||
+	    strcmp(ri.http_headers[1].name, "B") != 0 ||
+	    strcmp(ri.http_headers[1].value, "c d") != 0 ||
+	    strcmp(ri.http_headers[2].name, "C") != 0 ||
+	    strcmp(ri.http_headers[2].value, "") != 0)
+		fail("%s: good2 request", __func__);
+
+}
+
 int main(int argc, char *argv[])
 {
 	test_get_var();
 	test_fix_directory_separators();
 	test_make_path();
 	test_set_option();
+	test_parse_http_request();
 
 	return (EXIT_SUCCESS);
 }
