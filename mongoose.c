@@ -105,7 +105,6 @@
 #define	dlopen(x,y)		LoadLibrary(x)
 #define	dlsym(x,y)		GetProcAddress((HINSTANCE) (x), (y))
 #define	access(x, y)		_access(x, y)
-#define	getcwd(x, y)		mg_getcwd(x, y)
 #define	write(x, y, z)		_write(x, y, (unsigned) z)
 #define	read(x, y, z)		_read(x, y, (unsigned) z)
 #define	open(x, y, z)		_open(x, y, z)
@@ -180,6 +179,7 @@ typedef struct DIR {
 #define	mg_mkdir(x, y)		mkdir(x, y)
 #define	mg_open(x, y, z)	open(x, y, z)
 #define	mg_remove(x)		remove(x)
+#define	mg_getcwd(x, y)		getcwd(x, y)
 #define	ERRNO			errno
 #define	INVALID_SOCKET		(-1)
 #define LONGLONG_FMT		"ll"
@@ -905,9 +905,9 @@ pthread_cond_init(pthread_cond_t *cv, const void *unused)
 static int
 pthread_cond_wait(pthread_cond_t *cv, pthread_mutex_t *mutex)
 {
-	ReleaseMutex(*mutex);
-	WaitForSingleObject(*cv, INFINITE);
-	WaitForSingleObject(*mutex, INFINITE);
+	(void) ReleaseMutex(*mutex);
+	(void) WaitForSingleObject(*cv, INFINITE);
+	(void) WaitForSingleObject(*mutex, INFINITE);
 	return (0);
 }
 
@@ -978,7 +978,7 @@ to_unicode(const char *path, wchar_t *wbuf, size_t wbuf_len)
 		buf[0] = '\0';
 	}
 
-	MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, (int) wbuf_len);
+	(void) MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, (int) wbuf_len);
 }
 
 #ifdef _WIN32_WCE
@@ -1229,7 +1229,7 @@ mg_mkdir(const char *path, int mode)
 	mg_strlcpy(buf, path, sizeof(buf));
 	fix_directory_separators(buf);
 
-	MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, sizeof(wbuf));
+	(void) MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, sizeof(wbuf));
 
 	return (CreateDirectoryW(wbuf, NULL) ? 0 : -1);
 }
@@ -1271,7 +1271,7 @@ opendir(const char *name)
 		attrs = GetFileAttributesW(wpath);
 		if (attrs != 0xFFFFFFFF &&
 		    ((attrs & FILE_ATTRIBUTE_DIRECTORY) == FILE_ATTRIBUTE_DIRECTORY)) {
-			wcscat(wpath, L"\\*");
+			(void) wcscat(wpath, L"\\*");
 			dir->handle = FindFirstFileW(wpath, &dir->info);
 			dir->result.d_name[0] = '\0';
 		} else {
@@ -1309,12 +1309,12 @@ readdir(DIR *dir)
 	if (dir) {
 		if (dir->handle != INVALID_HANDLE_VALUE) {
 			result = &dir->result;
-			WideCharToMultiByte(CP_UTF8, 0, dir->info.cFileName,
-			    -1, result->d_name,
+			(void) WideCharToMultiByte(CP_UTF8, 0,
+			    dir->info.cFileName, -1, result->d_name,
 			    sizeof(result->d_name), NULL, NULL);
 
 			if (!FindNextFileW(dir->handle, &dir->info)) {
-				FindClose(dir->handle);
+				(void) FindClose(dir->handle);
 				dir->handle = INVALID_HANDLE_VALUE;
 			}
 
@@ -1341,7 +1341,7 @@ start_thread(struct mg_context *ctx, mg_thread_func_t func, void *param)
 	    (LPTHREAD_START_ROUTINE) func, param, 0, NULL);
 
 	if (hThread != NULL)
-		CloseHandle(hThread);
+		(void) CloseHandle(hThread);
 
 	return (hThread == NULL ? -1 : 0);
 }
@@ -1350,8 +1350,8 @@ start_thread(struct mg_context *ctx, mg_thread_func_t func, void *param)
 static int
 kill(pid_t pid, int sig_num)
 {
-	TerminateProcess(pid, sig_num);
-	CloseHandle(pid);
+	(void) TerminateProcess(pid, sig_num);
+	(void) CloseHandle(pid);
 	return (0);
 }
 
@@ -1376,9 +1376,9 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 	si.wShowWindow	= SW_HIDE;
 
 	me = GetCurrentProcess();
-	DuplicateHandle(me, (HANDLE) _get_osfhandle(fd_stdin), me,
+	(void) DuplicateHandle(me, (HANDLE) _get_osfhandle(fd_stdin), me,
 	    &si.hStdInput, 0, TRUE, DUPLICATE_SAME_ACCESS);
-	DuplicateHandle(me, (HANDLE) _get_osfhandle(fd_stdout), me,
+	(void) DuplicateHandle(me, (HANDLE) _get_osfhandle(fd_stdout), me,
 	    &si.hStdOutput, 0, TRUE, DUPLICATE_SAME_ACCESS);
 
 	/* If CGI file is a script, try to read the interpreter line */
@@ -1416,13 +1416,13 @@ spawn_process(struct mg_connection *conn, const char *prog, char *envblk,
 		    __func__, cmdline, ERRNO);
 		pi.hProcess = (pid_t) -1;
 	} else {
-		close(fd_stdin);
-		close(fd_stdout);
+		(void) close(fd_stdin);
+		(void) close(fd_stdout);
 	}
 
-	CloseHandle(si.hStdOutput);
-	CloseHandle(si.hStdInput);
-	CloseHandle(pi.hThread);
+	(void) CloseHandle(si.hStdOutput);
+	(void) CloseHandle(si.hStdInput);
+	(void) CloseHandle(pi.hThread);
 
 	return ((pid_t) pi.hProcess);
 }
@@ -4351,7 +4351,11 @@ mg_set_option(struct mg_context *ctx, const char *opt, const char *val)
 		/* Set new option value */
 		ctx->options[option->index] = val ? mg_strdup(val) : NULL;
 		unlock_option(ctx, i);
+
+		if (retval == FALSE)
+			cry(fc(ctx), "%s(%s): failure", __func__, opt);
 	} else {
+		cry(fc(ctx), "%s: No such option: [%s]", __func__, opt);
 		retval = -1;
 	}
 
@@ -4779,7 +4783,7 @@ mg_start(void)
 
 	/* Initial document root is set to current working directory */
 	if (ctx->options[OPT_ROOT] == NULL) {
-		if (getcwd(web_root, sizeof(web_root)) == NULL) {
+		if (mg_getcwd(web_root, sizeof(web_root)) == NULL) {
 			cry(fc(ctx), "%s: getcwd: %s",
 			    __func__, strerror(errno));
 			mg_strlcpy(web_root, ".", sizeof(web_root));

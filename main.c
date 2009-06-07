@@ -91,7 +91,7 @@ mg_edit_passwords(const char *fname, const char *domain,
 	int			retval;
 
 	ctx = mg_start();
-	mg_set_option(ctx, "auth_realm", domain);
+	(void) mg_set_option(ctx, "auth_realm", domain);
 	retval = mg_modify_passwords_file(ctx, fname, user, pass);
 	mg_stop(ctx);
 
@@ -121,7 +121,7 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 	} else {
 		/* No config file specified. Look for one where binary lives */
 		if ((p = strrchr(argv[0], DIRSEP)) != 0) {
-			snprintf(path, sizeof(path), "%.*s%s",
+			(void) snprintf(path, sizeof(path), "%.*s%s",
 			    (int) (p - argv[0]) + 1, argv[0], config_file);
 			config_file = path;
 		}
@@ -156,7 +156,8 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 				    config_file, (int) line_no);
 				exit(EXIT_FAILURE);
 			}
-			mg_set_option(ctx, opt, val);
+			if (mg_set_option(ctx, opt, val) != 1)
+				exit(EXIT_FAILURE);
 		}
 
 		(void) fclose(fp);
@@ -164,11 +165,8 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 
 	/* Now pass through the command line options */
 	for (i = 1; argv[i] != NULL && argv[i][0] == '-'; i += 2)
-		if (mg_set_option(ctx, &argv[i][1], argv[i + 1]) != 1) {
-			(void) fprintf(stderr, "Error setting "
-			    "option \"%s\"\n", &argv[i][1]);
+		if (mg_set_option(ctx, &argv[i][1], argv[i + 1]) != 1)
 			exit(EXIT_FAILURE);
-		}
 }
 
 int
