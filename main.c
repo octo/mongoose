@@ -51,7 +51,6 @@
 #endif /* _WIN32 */
 
 static int exit_flag;	                /* Program termination flag	*/
-static struct mg_context *ctx;		/* Mongoose context		*/
 
 #if !defined(CONFIG_FILE)
 #define	CONFIG_FILE		"mongoose.conf"
@@ -175,6 +174,8 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 int
 main(int argc, char *argv[])
 {
+	struct mg_context	*ctx;
+
 	if (argc > 1 && argv[1][0] == '-' && argv[1][1] == 'A') {
 		if (argc != 6)
 			show_usage_and_exit();
