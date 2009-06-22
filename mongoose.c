@@ -3020,7 +3020,6 @@ substitute_index_file(struct mg_connection *conn,
 	lock_option(conn->ctx, OPT_INDEX_FILES);
 	list = conn->ctx->options[OPT_INDEX_FILES];
 	found = FALSE;
-	cry(conn, "%s: %s", __func__, list);
 
 	while ((list = next_option(list, &filename_vec, NULL)) != NULL) {
 
