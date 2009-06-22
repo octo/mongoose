@@ -151,7 +151,7 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 			if (line[0] == '#' || line[0] == '\n')
 				continue;
 
-			if (sscanf(line, "%s %[^\n#]", opt, val) != 2) {
+			if (sscanf(line, "%s %[^\r\n#]", opt, val) != 2) {
 				fprintf(stderr, "%s: line %d is invalid\n",
 				    config_file, (int) line_no);
 				exit(EXIT_FAILURE);
