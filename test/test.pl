@@ -207,9 +207,6 @@ o("GET /$test_dir_uri/ HTTP/1.0\n\n", 'tralala', 'Index substitution');
 o("GET / HTTP/1.0\n\n", 'embed.c', 'Directory listing - file name');
 o("GET /ta/ HTTP/1.0\n\n", 'Modified', 'Aliases');
 o("GET /not-exist HTTP/1.0\r\n\n", 'HTTP/1.1 404', 'Not existent file');
-o("GET /hello.txt HTTP/1.1\n\nGET /hello.txt HTTP/1.0\n\n",
-	'HTTP/1.1 200.+keep-alive.+HTTP/1.1 200.+close',
-	'Request pipelining', 2);
 mkdir $test_dir . $dir_separator . 'x';
 my $path = $test_dir . $dir_separator . 'x' . $dir_separator . 'index.cgi';
 write_file($path, read_file($root . $dir_separator . 'env.cgi'));
