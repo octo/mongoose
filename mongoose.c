@@ -79,13 +79,20 @@
 #define MAKEUQUAD(lo, hi)	((uint64_t)(((uint32_t)(lo)) | \
 				((uint64_t)((uint32_t)(hi))) << 32))
 #define	SYS2UNIX_TIME(lo, hi) \
-	(time_t) ((MAKEUQUAD((lo), (hi)) - EPOCH_DIFF) / RATE_DIFF);
+	(time_t) ((MAKEUQUAD((lo), (hi)) - EPOCH_DIFF) / RATE_DIFF)
 
+/*
+ * Visual Studio 6 does not know __func__ or __FUNCTION__
+ * The rest of MS compilers use __FUNCTION__, not C99 __func__
+ */
+#if defined(_MSC_VER) && _MSC_VER < 1300
 #define	STRX(x)			#x
 #define	STR(x)			STRX(x)
-#if !defined(__func__)
 #define	__func__		"line " STR(__LINE__)
-#endif /* !__func__ */
+#else
+#define	__func__		__FUNCTION__
+#endif /* _MSC_VER */
+
 #define	ERRNO			GetLastError()
 #define	NO_SOCKLEN_T
 #define	SSL_LIB			"ssleay32.dll"
@@ -108,17 +115,13 @@
 
 #define	popen(x, y)		_popen(x, y)
 #define	pclose(x)		_pclose(x)
-#define	RTLD_LAZY		0
-#define	dlsym(x,y)		GetProcAddress((HINSTANCE) (x), (y))
-#if 0
-#define	dlopen(x,y)		LoadLibrary(x)
-#define	access(x, y)		_access(x, y)
-#define	write(x, y, z)		_write(x, y, (unsigned) z)
-#define	read(x, y, z)		_read(x, y, (unsigned) z)
-#define	open(x, y, z)		_open(x, y, z)
-#define	lseek(x, y, z)		_lseek(x, y, z)
 #define	close(x)		_close(x)
-#endif
+#define	dlsym(x,y)		GetProcAddress((HINSTANCE) (x), (y))
+#define	dlopen(x,y)		LoadLibrary(x)
+#define	fseeko(x, y, z)		fseek((x), (y), (z))
+#define	access(x, y)		_access((x), (y))
+#define	write(x, y, z)		_write((x), (y), (unsigned) z)
+#define	read(x, y, z)		_read((x), (y), (unsigned) z)
 #define	flockfile(x)		(void) 0 // FIXME
 #define	funlockfile(x)		(void) 0 // FIXME
 
@@ -1126,22 +1129,15 @@ rename(const char* oldname, const char* newname)
 
 #endif
 
-int
-mg_open(const char *path, int flags, int mode)
+static FILE *
+mg_fopen(const char *path, const char *mode)
 {
-	wchar_t	wbuf[FILENAME_MAX];
+	wchar_t	wbuf[FILENAME_MAX], wmode[20];
 
 	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
+	MultiByteToWideChar(CP_UTF8, 0, mode, -1, wmode, ARRAY_SIZE(wmode));
 
-	return (_wopen(wbuf, flags, mode));
-}
-
-static HINSTANCE
-dlopen(const char *path, int mode)
-{
-	wchar_t	wbuf[FILENAME_MAX];
-	to_unicode(path, wbuf, ARRAY_SIZE(wbuf));
-	return (LoadLibraryW(wbuf));
+	return (_wfopen(wbuf, wmode));
 }
 
 static int
