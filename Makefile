@@ -24,7 +24,7 @@ all:
 CFLAGS=		-W -Wall -std=c99 -pedantic -Os -fomit-frame-pointer $(COPT)
 MAC_SHARED=	-flat_namespace -bundle -undefined suppress
 LINFLAGS=	-D_POSIX_SOURCE -D_BSD_SOURCE -D_FILE_OFFSET_BITS=64 \
-		-ldl -lpthread $(CFLAGS)
+		-D_LARGEFILE_SOURCE -ldl -lpthread $(CFLAGS)
 LIB=		_$(PROG).so
 
 linux:
