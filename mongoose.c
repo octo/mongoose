@@ -4468,9 +4468,9 @@ get_socket(struct mg_context *ctx, struct socket *sp)
 	    __func__, (void *) pthread_self(), sp->sock));
 
 	/* Wrap pointers if needed */
-	if (ctx->sq_tail > (int) ARRAY_SIZE(ctx->queue)) {
-		ctx->sq_tail %= ARRAY_SIZE(ctx->queue);
-		ctx->sq_head %= ARRAY_SIZE(ctx->queue);
+	while (ctx->sq_tail > (int) ARRAY_SIZE(ctx->queue)) {
+		ctx->sq_tail -= ARRAY_SIZE(ctx->queue);
+		ctx->sq_head -= ARRAY_SIZE(ctx->queue);
 	}
 
 	pthread_cond_signal(&ctx->full_cond);
