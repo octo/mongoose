@@ -327,15 +327,6 @@ static const char *month_names[] = {
 	"Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
 };
 
-#ifdef _WIN32_WCE
-/*
- * Short Weekday Names
- */
-static const char *short_weekday_names[] = {
-	"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"
-};
-#endif /* _WIN32_WCE */
-
 /*
  * Unified socket address. For IPv6 support, add IPv6 address structure
  * in the union u.
@@ -429,10 +420,17 @@ struct mg_context {
 	pthread_mutex_t	opt_mutex[NUM_OPTIONS];	/* Option protector	*/
 
 	int		max_threads;	/* Maximum number of threads	*/
-	int		num_threads;	/* Number of active threads	*/
+	int		num_threads;	/* Number of threads		*/
+	int		num_idle;	/* Number of idle threads	*/
 	pthread_mutex_t	thr_mutex;	/* Protects (max|num)_threads	*/
 	pthread_cond_t	thr_cond;
 	pthread_mutex_t	bind_mutex;	/* Protects bind operations	*/
+
+	struct socket	queue[20];	/* Accepted sockets		*/
+	int		sq_head;	/* Head of the socket queue	*/
+	int		sq_tail;	/* Tail of the socket queue	*/
+	pthread_cond_t	empty_cond;	/* Socket queue empty condvar	*/
+	pthread_cond_t	full_cond;	/* Socket queue full condvar	*/
 
 	mg_spcb_t	ssl_password_callback;
 	mg_callback_t	log_callback;
@@ -3941,6 +3939,8 @@ mg_fini(struct mg_context *ctx)
 	(void) pthread_mutex_destroy(&ctx->thr_mutex);
 	(void) pthread_mutex_destroy(&ctx->bind_mutex);
 	(void) pthread_cond_destroy(&ctx->thr_cond);
+	(void) pthread_cond_destroy(&ctx->empty_cond);
+	(void) pthread_cond_destroy(&ctx->full_cond);
 
 	/* Signal mg_stop() that we're done */
 	ctx->stop_flag = 2;
@@ -4470,44 +4470,131 @@ process_new_connection(struct mg_connection *conn)
 
 }
 
-static void
-worker_thread(struct mg_connection *conn)
+/*
+ * Worker threads take accepted socket from the queue
+ */
+static bool_t
+get_socket(struct mg_context *ctx, struct socket *sp)
 {
-	DEBUG_TRACE((DEBUG_MGS_PREFIX "%s: thread %p starting",
-	    __func__, (void *) conn));
+	struct timespec	ts;
 
-	if (conn->client.is_ssl &&
-	    (conn->ssl = SSL_new(conn->ctx->ssl_ctx)) == NULL) {
-		cry(conn, "%s: SSL_new: %d", __func__, ERRNO);
-	} else if (conn->client.is_ssl &&
-	    SSL_set_fd(conn->ssl, conn->client.sock) != 1) {
-		cry(conn, "%s: SSL_set_fd: %d", __func__, ERRNO);
-	} else if (conn->client.is_ssl && SSL_accept(conn->ssl) != 1) {
-		cry(conn, "%s: SSL handshake error", __func__);
-	} else {
-		process_new_connection(conn);
+	(void) pthread_mutex_lock(&ctx->thr_mutex);
+	DEBUG_TRACE((DEBUG_MGS_PREFIX "%s: thread %p: going idle",
+	    __func__, (void *) pthread_self()));
+
+	/* If the queue is empty, wait. We're idle at this point. */
+	ctx->num_idle++;
+	while (ctx->sq_head == ctx->sq_tail) {
+		ts.tv_nsec = 0;
+		ts.tv_sec = time(NULL) + atoi(ctx->options[OPT_IDLE_TIME]) + 1;
+		if (pthread_cond_timedwait(&ctx->empty_cond,
+		    &ctx->thr_mutex, &ts) != 0) {
+			/* Timeout! release the mutex and return */
+			(void) pthread_mutex_unlock(&ctx->thr_mutex);
+			return (FALSE);
+		}
+	}
+	assert(ctx->sq_head > ctx->sq_tail);
+
+	/* We're going busy now: got a socket to process! */
+	ctx->num_idle--;
+
+	/* Copy socket from the queue and increment tail */
+	*sp = ctx->queue[ctx->sq_tail % ARRAY_SIZE(ctx->queue)];
+	ctx->sq_tail++;
+	DEBUG_TRACE((DEBUG_MGS_PREFIX
+	    "%s: thread %p grabbed socket %d, going busy",
+	    __func__, (void *) pthread_self(), sp->sock));
+
+	/* Wrap pointers if needed */
+	if (ctx->sq_tail > (int) ARRAY_SIZE(ctx->queue)) {
+		ctx->sq_tail %= ARRAY_SIZE(ctx->queue);
+		ctx->sq_head %= ARRAY_SIZE(ctx->queue);
 	}
 
-	close_connection(conn);
+	pthread_cond_signal(&ctx->full_cond);
+	(void) pthread_mutex_unlock(&ctx->thr_mutex);
+
+	return (TRUE);
+}
+
+static void
+worker_thread(struct mg_context *ctx)
+{
+	struct mg_connection	conn;
+
+	DEBUG_TRACE((DEBUG_MGS_PREFIX "%s: thread %p starting",
+	    __func__, (void *) pthread_self()));
+
+	(void) memset(&conn, 0, sizeof(conn));
+
+	while (get_socket(ctx, &conn.client) == TRUE) {
+		conn.birth_time = time(NULL);
+		conn.ctx = ctx;
+
+		if (conn.client.is_ssl &&
+		    (conn.ssl = SSL_new(conn.ctx->ssl_ctx)) == NULL) {
+			cry(&conn, "%s: SSL_new: %d", __func__, ERRNO);
+		} else if (conn.client.is_ssl &&
+		    SSL_set_fd(conn.ssl, conn.client.sock) != 1) {
+			cry(&conn, "%s: SSL_set_fd: %d", __func__, ERRNO);
+		} else if (conn.client.is_ssl && SSL_accept(conn.ssl) != 1) {
+			cry(&conn, "%s: SSL handshake error", __func__);
+		} else {
+			process_new_connection(&conn);
+		}
+
+		close_connection(&conn);
+	}
 
 	/* Signal master that we're done with connection and exiting */
-	pthread_mutex_lock(&conn->ctx->thr_mutex);
-	conn->ctx->num_threads--;
-	pthread_cond_signal(&conn->ctx->thr_cond);
-	assert(conn->ctx->num_threads >= 0);
+	pthread_mutex_lock(&conn.ctx->thr_mutex);
+	conn.ctx->num_threads--;
+	conn.ctx->num_idle--;
+	pthread_cond_signal(&conn.ctx->thr_cond);
+	assert(conn.ctx->num_threads >= 0);
+	pthread_mutex_unlock(&conn.ctx->thr_mutex);
 
 	DEBUG_TRACE((DEBUG_MGS_PREFIX "%s: thread %p exiting",
-	    __func__, (void *) conn));
-	pthread_mutex_unlock(&conn->ctx->thr_mutex);
+	    __func__, (void *) pthread_self()));
+}
 
-	free(conn);
+/*
+ * Master thread adds accepted socket to a queue
+ */
+static void
+put_socket(struct mg_context *ctx, const struct socket *sp)
+{
+	(void) pthread_mutex_lock(&ctx->thr_mutex);
+
+	/* If the queue is full, wait */
+	while (ctx->sq_head - ctx->sq_tail >= (int) ARRAY_SIZE(ctx->queue))
+		(void) pthread_cond_wait(&ctx->full_cond, &ctx->thr_mutex);
+	assert(ctx->sq_head - ctx->sq_tail < (int) ARRAY_SIZE(ctx->queue));
+
+	/* Copy socket to the queue and increment head */
+	ctx->queue[ctx->sq_head % ARRAY_SIZE(ctx->queue)] = *sp;
+	ctx->sq_head++;
+	DEBUG_TRACE((DEBUG_MGS_PREFIX "%s: queued socket %d",
+	    __func__, sp->sock));
+
+	/* If there are no idle threads, start one */
+	if (ctx->num_idle == 0 && ctx->num_threads < ctx->max_threads) {
+		if (start_thread(ctx,
+		    (mg_thread_func_t) worker_thread, ctx) != 0)
+			cry(fc(ctx), "Cannot start thread: %d", ERRNO);
+		else
+			ctx->num_threads++;
+	}
+
+	pthread_cond_signal(&ctx->empty_cond);
+	(void) pthread_mutex_unlock(&ctx->thr_mutex);
 }
 
 static void
 accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 {
 	struct socket		accepted;
-	struct mg_connection	*conn;
 
 	accepted.usa.len = sizeof(accepted.usa.u.sin);
 	if ((accepted.sock = accept(listener->sock,
@@ -4525,34 +4612,11 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 	}
 	unlock_option(ctx, OPT_ACL);
 
-	if ((conn = (struct mg_connection *)calloc(1, sizeof(*conn))) == NULL) {
-		cry(fc(ctx), "%s: cannot allocate new socket", __func__);
-		(void) closesocket(accepted.sock);
-	} else {
-		accepted.is_ssl = listener->is_ssl;
-		conn->client = accepted;
-		conn->ctx = ctx;
-		conn->birth_time = time(NULL);
-
-		/*
-		 * If we need to start a new thread and it is maximum
-		 * allowed already running, wait until some become idle.
-		 */
-		(void) pthread_mutex_lock(&ctx->thr_mutex);
-		while (ctx->num_threads >= ctx->max_threads)
-			(void) pthread_cond_wait(&ctx->thr_cond,
-			    &ctx->thr_mutex);
-
-		ctx->num_threads++;
-		(void) pthread_mutex_unlock(&ctx->thr_mutex);
-
-		if (start_thread(ctx, (mg_thread_func_t)
-		    worker_thread, conn) != 0) {
-			cry(fc(ctx), "Cannot start thread: %d", ERRNO);
-			(void) closesocket(accepted.sock);
-			free(conn);
-		}
-	}
+	/* Put accepted socket structure into the queue */
+	DEBUG_TRACE((DEBUG_MGS_PREFIX "%s: accepted socket %d",
+	    __func__, accepted.sock));
+	accepted.is_ssl = listener->is_ssl;
+	put_socket(ctx, &accepted);
 }
 
 static void
@@ -4676,6 +4740,8 @@ mg_start(void)
 	(void) pthread_mutex_init(&ctx->thr_mutex, NULL);
 	(void) pthread_mutex_init(&ctx->bind_mutex, NULL);
 	(void) pthread_cond_init(&ctx->thr_cond, NULL);
+	(void) pthread_cond_init(&ctx->empty_cond, NULL);
+	(void) pthread_cond_init(&ctx->full_cond, NULL);
 
 	/* Start master (listening) thread */
 	start_thread(ctx, (mg_thread_func_t) master_thread, ctx);
