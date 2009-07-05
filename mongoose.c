@@ -97,10 +97,6 @@ typedef long off_t;
 #define	_POSIX_
 #define UINT64_FMT		"I64"
 
-#if !defined(R_OK)
-#define	R_OK			04 /* for _access() */
-#endif /* !R_OK  MINGW #defines R_OK */
-
 #define	SHUT_WR			1
 #define	snprintf		_snprintf
 #define	vsnprintf		_vsnprintf
@@ -110,9 +106,8 @@ typedef long off_t;
 #define	pclose(x)		_pclose(x)
 #define	close(x)		_close(x)
 #define	dlsym(x,y)		GetProcAddress((HINSTANCE) (x), (y))
-#define	dlopen(x,y)		LoadLibrary(x)
+#define	RTLD_LAZY		0
 #define	fseeko(x, y, z)		fseek((x), (y), (z))
-#define	access(x, y)		_access((x), (y))
 #define	write(x, y, z)		_write((x), (y), (unsigned) z)
 #define	read(x, y, z)		_read((x), (y), (unsigned) z)
 #define	flockfile(x)		(void) 0
@@ -185,6 +180,7 @@ typedef struct DIR {
 #define	mg_fopen(x, y)		fopen(x, y)
 #define	mg_mkdir(x, y)		mkdir(x, y)
 #define	mg_remove(x)		remove(x)
+#define	mg_rename(x, y)		rename(x, y)
 #define	mg_getcwd(x, y)		getcwd(x, y)
 #define	ERRNO			errno
 #define	INVALID_SOCKET		(-1)
@@ -456,9 +452,6 @@ cry(struct mg_connection *conn, const char *fmt, ...)
 
 	va_start(ap, fmt);
 	(void) vsnprintf(buf, sizeof(buf), fmt, ap);
-#if defined(DEBUG) && defined(_WIN32_WCE)
-	NKDbgPrintfW(L"%hs\n", buf);
-#endif /* DEBUG && _WIN32_WCE */
 	conn->ctx->log_callback(conn, &conn->request_info, buf);
 	va_end(ap);
 }
@@ -493,18 +486,10 @@ builtin_error_log(struct mg_connection *conn,
 
 	timestamp = time(NULL);
 
-#ifndef _WIN32_WCE
-	(void) fprintf(fp,
-	    "[%.*s] [error] [client %s] ",
-	    24, ctime(&timestamp),  /* Print 25 characters, no trailing \n */
-	    inet_ntoa(conn->client.usa.u.sin.sin_addr));
-#else
-	// writing out timestamp unformatted is easier then coding ctime
 	(void) fprintf(fp,
 	    "[%010d] [error] [client %s] ",
 	    timestamp,
 	    inet_ntoa(conn->client.usa.u.sin.sin_addr));
-#endif /* _WIN32_WCE */
 
 	if (request_info->request_method != NULL)
 		(void) fprintf(fp, "%s %s: ",
@@ -984,7 +969,7 @@ to_unicode(const char *path, wchar_t *wbuf, size_t wbuf_len)
 	(void) MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, (int) wbuf_len);
 }
 
-#ifdef _WIN32_WCE
+#if defined(_WIN32_WCE)
 
 static time_t
 time(time_t *ptime)
@@ -1051,9 +1036,16 @@ localtime(const time_t *ptime, struct tm *ptm)
 	return ptm;
 }
 
+static size_t
+strftime(char *dst, size_t dst_size, const char *fmt, const struct tm *tm)
+{
+	(void) snprintf(dst, dst_size, "implement strftime() for WinCE");
+	return (0);
+}	
+#endif
 
 static int
-rename(const char* oldname, const char* newname)
+mg_rename(const char* oldname, const char* newname)
 {
 	wchar_t	woldbuf[FILENAME_MAX];
 	wchar_t	wnewbuf[FILENAME_MAX];
@@ -1064,7 +1056,6 @@ rename(const char* oldname, const char* newname)
 	return (MoveFileW(woldbuf, wnewbuf) ? 0 : -1);
 }
 
-#endif
 
 static FILE *
 mg_fopen(const char *path, const char *mode)
@@ -1232,6 +1223,17 @@ start_thread(struct mg_context *ctx, mg_thread_func_t func, void *param)
 		(void) CloseHandle(hThread);
 
 	return (hThread == NULL ? -1 : 0);
+}
+
+static HANDLE
+dlopen(const char *dll_name, int flags)
+{
+	wchar_t	wbuf[FILENAME_MAX];
+
+	flags = 0; /* Unused */
+	to_unicode(dll_name, wbuf, ARRAY_SIZE(wbuf));
+
+	return (LoadLibraryW(wbuf));
 }
 
 #if !defined(NO_CGI)
@@ -1465,7 +1467,7 @@ unlock_option(struct mg_context *ctx, int opt_index)
  * descriptor. Return number of bytes written.
  */
 static uint64_t
-push(int fd, SOCKET sock, SSL *ssl, const char *buf, uint64_t len)
+push(FILE *fp, SOCKET sock, SSL *ssl, const char *buf, uint64_t len)
 {
 	uint64_t	sent;
 	int		n, k;
@@ -1478,8 +1480,10 @@ push(int fd, SOCKET sock, SSL *ssl, const char *buf, uint64_t len)
 
 		if (ssl != NULL) {
 			n = SSL_write(ssl, buf + sent, k);
-		} else if (fd != -1) {
-			n = write(fd, buf + sent, k);
+		} else if (fp != NULL) {
+			n = fwrite(buf + sent, 1, k, fp);
+			if (ferror(fp))
+				n = -1;
 		} else {
 			n = send(sock, buf + sent, k, 0);
 		}
@@ -1498,14 +1502,16 @@ push(int fd, SOCKET sock, SSL *ssl, const char *buf, uint64_t len)
  * Return number of bytes read.
  */
 static int
-pull(int fd, SOCKET sock, SSL *ssl, char *buf, int len)
+pull(FILE *fp, SOCKET sock, SSL *ssl, char *buf, int len)
 {
 	int	nread;
 
 	if (ssl != NULL) {
 		nread = SSL_read(ssl, buf, len);
-	} else if (fd != -1) {
-		nread = read(fd, buf, (size_t) len);
+	} else if (fp != NULL) {
+		nread = fread(buf, 1, (size_t) len, fp);
+		if (ferror(fp))
+			nread = -1;
 	} else {
 		nread = recv(sock, buf, (size_t) len, 0);
 	}
@@ -1517,7 +1523,7 @@ int
 mg_write(struct mg_connection *conn, const void *buf, int len)
 {
 	assert(len >= 0);
-	return ((int) push(-1, conn->client.sock, conn->ssl,
+	return ((int) push(NULL, conn->client.sock, conn->ssl,
 				(const char *) buf, (uint64_t) len));
 }
 
@@ -2509,8 +2515,8 @@ mg_modify_passwords_file(struct mg_context *ctx, const char *fname,
 	(void) fclose(fp2);
 
 	/* Put the temp file in place of real file */
-	(void) remove(fname);
-	(void) rename(tmp, fname);
+	(void) mg_remove(fname);
+	(void) mg_rename(tmp, fname);
 
 	return (0);
 }
@@ -2835,13 +2841,13 @@ parse_http_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
  * Upon every read operation, increase nread by the number of bytes read.
  */
 static int
-read_request(int fd, SOCKET sock, SSL *ssl, char *buf, int bufsiz, int *nread)
+read_request(FILE *fp, SOCKET sock, SSL *ssl, char *buf, int bufsiz, int *nread)
 {
 	int	n, request_len;
 
 	request_len = 0;
 	while (*nread < bufsiz && request_len == 0) {
-		n = pull(fd, sock, ssl, buf + *nread, bufsiz - *nread);
+		n = pull(fp, sock, ssl, buf + *nread, bufsiz - *nread);
 		if (n <= 0) {
 			break;
 		} else {
@@ -2996,17 +3002,17 @@ is_not_modified(const struct mg_connection *conn, const struct mgstat *stp)
 }
 
 static bool_t
-append_chunk(struct mg_request_info *ri, int fd, const char *buf, int len)
+append_chunk(struct mg_request_info *ri, FILE *fp, const char *buf, int len)
 {
 	bool_t	ret_code = TRUE;
 
-	if (fd == -1) {
+	if (fp == NULL) {
 		/* TODO: check for NULL here */
 		ri->post_data = (char *) realloc(ri->post_data,
 		    ri->post_data_len + len);
 		(void) memcpy(ri->post_data + ri->post_data_len, buf, len);
 		ri->post_data_len += len;
-	} else if (push(fd, INVALID_SOCKET,
+	} else if (push(fp, INVALID_SOCKET,
 	    NULL, buf, (uint64_t) len) != (uint64_t) len) {
 		ret_code = FALSE;
 	}
@@ -3015,7 +3021,7 @@ append_chunk(struct mg_request_info *ri, int fd, const char *buf, int len)
 }
 
 static bool_t
-handle_request_body(struct mg_connection *conn, int fd)
+handle_request_body(struct mg_connection *conn, FILE *fp)
 {
 	struct mg_request_info	*ri = &conn->request_info;
 	const char	*expect, *tmp;
@@ -3041,24 +3047,24 @@ handle_request_body(struct mg_connection *conn, int fd)
 		if (content_len <= (uint64_t) already_read) {
 			ri->post_data_len = (int) content_len;
 			/*
-			 * If fd == -1, this is embedded mode, and we do not
+			 * If fp is NULL, this is embedded mode, and we do not
 			 * have to do anything: POST data is already there,
 			 * no need to allocate a buffer and copy it in.
-			 * If fd != -1, we need to write the data.
+			 * If fp != NULL, we need to write the data.
 			 */
-			success_code = (fd == -1) || (push(fd, INVALID_SOCKET,
+			success_code = fp == NULL || (push(fp, INVALID_SOCKET,
 			    NULL, ri->post_data, content_len) == content_len) ?
 			    TRUE : FALSE;
 		} else {
 
-			if (fd == -1) {
+			if (fp == NULL) {
 				conn->free_post_data = TRUE;
 				tmp = ri->post_data;
 				/* +1 in case if already_read == 0 */
 				ri->post_data = (char*)malloc(already_read + 1);
 				(void) memcpy(ri->post_data, tmp, already_read);
 			} else {
-				(void) push(fd, INVALID_SOCKET, NULL,
+				(void) push(fp, INVALID_SOCKET, NULL,
 				    ri->post_data, (uint64_t) already_read);
 			}
 
@@ -3068,11 +3074,11 @@ handle_request_body(struct mg_connection *conn, int fd)
 				to_read = sizeof(buf);
 				if ((uint64_t) to_read > content_len)
 					to_read = (int) content_len;
-				nread = pull(-1, conn->client.sock,
+				nread = pull(NULL, conn->client.sock,
 				    conn->ssl, buf, to_read);
 				if (nread <= 0)
 					break;
-				if (!append_chunk(ri, fd, buf, nread))
+				if (!append_chunk(ri, fp, buf, nread))
 					break;
 				content_len -= nread;
 			}
@@ -3251,6 +3257,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	struct cgi_env_block	blk;
 	char			dir[FILENAME_MAX], *p;
 	int			fd_stdin[2], fd_stdout[2];
+	FILE			*in, *out;
 	pid_t			pid;
 
 	prepare_cgi_environment(conn, prog, &blk);
@@ -3262,16 +3269,24 @@ send_cgi(struct mg_connection *conn, const char *prog)
 
 	pid = (pid_t) -1;
 	fd_stdin[0] = fd_stdin[1] = fd_stdout[0] = fd_stdout[1] = -1;
+	in = out = NULL;
+
 	if (pipe(fd_stdin) != 0 || pipe(fd_stdout) != 0) {
 		send_error(conn, 500, http_500_error,
 		    "Cannot create CGI pipe: %s", strerror(ERRNO));
 		goto done;
-	}
-
-	if ((pid = spawn_process(conn, p, blk.buf, blk.vars,
+	} else if ((pid = spawn_process(conn, p, blk.buf, blk.vars,
 	    fd_stdin[0], fd_stdout[1], dir)) == (pid_t) -1) {
 		goto done;
+	} else if ((in = fdopen(fd_stdin[1], "wb")) == NULL ||
+	    (out = fdopen(fd_stdout[0], "rb")) == NULL) {
+		send_error(conn, 500, http_500_error,
+		    "fopen: %s", strerror(ERRNO));
+		goto done;
 	}
+
+	setbuf(in, NULL);
+	setbuf(out, NULL);
 
 	/*
 	 * spawn_process() must close those!
@@ -3283,7 +3298,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 
 	/* Send POST data to the CGI process if needed */
 	if (!strcmp(conn->request_info.request_method, "POST") &&
-	    !handle_request_body(conn, fd_stdin[1])) {
+	    !handle_request_body(conn, in)) {
 		goto done;
 	}
 
@@ -3294,7 +3309,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	 * HTTP headers.
 	 */
 	data_len = 0;
-	headers_len = read_request(fd_stdout[0], INVALID_SOCKET, NULL,
+	headers_len = read_request(out, INVALID_SOCKET, NULL,
 	    buf, sizeof(buf), &data_len);
 	if (headers_len <= 0) {
 		send_error(conn, 500, http_500_error,
@@ -3332,7 +3347,7 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	 * In all such cases, stop data exchange and do cleanup.
 	 */
 	do {
-		n = pull(fd_stdout[0], INVALID_SOCKET, NULL, buf, sizeof(buf));
+		n = pull(out, INVALID_SOCKET, NULL, buf, sizeof(buf));
 		if (n > 0)
 			n = mg_write(conn, buf, n);
 		if (n > 0)
@@ -3344,12 +3359,18 @@ done:
 		kill(pid, SIGTERM);
 	if (fd_stdin[0] != -1)
 		(void) close(fd_stdin[0]);
-	if (fd_stdin[1] != -1)
-		(void) close(fd_stdin[1]);
-	if (fd_stdout[0] != -1)
-		(void) close(fd_stdout[0]);
 	if (fd_stdout[1] != -1)
 		(void) close(fd_stdout[1]);
+
+	if (in != NULL)
+		(void) fclose(in);
+	else if (fd_stdin[1] != -1)
+		(void) close(fd_stdin[1]);
+
+	if (out != NULL)
+		(void) fclose(out);
+	else if (fd_stdout[0] != -1)
+		(void) close(fd_stdout[0]);
 }
 #endif /* !NO_CGI */
 
@@ -3406,7 +3427,7 @@ put_file(struct mg_connection *conn, const char *path)
 		    "fopen(%s): %s", path, strerror(ERRNO));
 	} else {
 		set_close_on_exec(fileno(fp));
-		if (handle_request_body(conn, fileno(fp)))
+		if (handle_request_body(conn, fp))
 			send_error(conn, conn->request_info.status_code,
 			    "OK", "");
 		(void) fclose(fp);
@@ -3623,7 +3644,7 @@ analyze_request(struct mg_connection *conn)
 	} else if ((cb = find_callback(conn->ctx, FALSE, uri, -1)) != NULL) {
 		if ((strcmp(ri->request_method, "POST") != 0 &&
 		    strcmp(ri->request_method, "PUT") != 0) ||
-		    handle_request_body(conn, -1))
+		    handle_request_body(conn, NULL))
 			cb->func(conn, &conn->request_info, cb->user_data);
 	} else if (strstr(path, PASSWORDS_FILE_NAME)) {
 		/* Do not allow to view passwords files */
@@ -4057,8 +4078,9 @@ set_elog_option(struct mg_context *ctx, const char *path)
 static bool_t
 set_gpass_option(struct mg_context *ctx, const char *path)
 {
+	struct mgstat	mgstat;
 	ctx = NULL;
-	return (access(path, R_OK) == 0);
+	return (mg_stat(path, &mgstat) == 0);
 }
 
 static bool_t
@@ -4312,7 +4334,7 @@ close_socket_gracefully(struct mg_connection *conn, SOCKET sock)
 	 * does recv() it gets no data back.
 	 */
 	do {
-		n = pull(-1, sock, NULL, buf, sizeof(buf));
+		n = pull(NULL, sock, NULL, buf, sizeof(buf));
 	} while (n > 0);
 
 	/* Now we know that our FIN is ACK-ed, safe to close */
@@ -4374,7 +4396,7 @@ process_new_connection(struct mg_connection *conn)
 
 	/* If next request is not pipelined, read it in */
 	if ((request_len = get_request_len(buf, (size_t) nread)) == 0)
-		request_len = read_request(-1, conn->client.sock,
+		request_len = read_request(NULL, conn->client.sock,
 		    conn->ssl, buf, sizeof(buf), &nread);
 	assert(nread >= request_len);
 
