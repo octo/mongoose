@@ -487,8 +487,8 @@ builtin_error_log(struct mg_connection *conn,
 	timestamp = time(NULL);
 
 	(void) fprintf(fp,
-	    "[%010d] [error] [client %s] ",
-	    timestamp,
+	    "[%010lu] [error] [client %s] ",
+	    (unsigned long) timestamp,
 	    inet_ntoa(conn->client.usa.u.sin.sin_addr));
 
 	if (request_info->request_method != NULL)
