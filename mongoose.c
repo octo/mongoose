@@ -61,17 +61,10 @@
 
 #define FILENAME_MAX	MAX_PATH
 #define BUFSIZ		4096
-
-#define O_BINARY	0x01
-#define O_RDONLY	0x02
-#define O_WRONLY	0x04
-#define O_CREAT		0x08
-#define O_TRUNC		0x10
+typedef long off_t;
 
 #define errno			GetLastError()
 #define strerror(x)		_ultoa(x, (char *) _alloca(sizeof(x) *3 ), 10)
-#define	flockfile(x)		(void) 0
-#define	funlockfile(x)		(void) 0
 #endif /* _WIN32_WCE */
 
 #define EPOCH_DIFF	0x019DB1DED53E8000 /* 116444736000000000 nsecs */
@@ -122,8 +115,8 @@
 #define	access(x, y)		_access((x), (y))
 #define	write(x, y, z)		_write((x), (y), (unsigned) z)
 #define	read(x, y, z)		_read((x), (y), (unsigned) z)
-#define	flockfile(x)		(void) 0 // FIXME
-#define	funlockfile(x)		(void) 0 // FIXME
+#define	flockfile(x)		(void) 0
+#define	funlockfile(x)		(void) 0
 
 #ifdef HAVE_STRTOUI64
 #define	strtoull(x, y, z)	_strtoui64(x, y, z)
@@ -137,15 +130,16 @@
 
 typedef HANDLE pthread_mutex_t;
 typedef HANDLE pthread_cond_t;
-typedef HANDLE pthread_t;
+typedef DWORD pthread_t;
 typedef HANDLE pid_t;
+
+struct timespec {
+	long tv_nsec;
+	long tv_sec;
+};
 
 static int pthread_mutex_lock(pthread_mutex_t *);
 static int pthread_mutex_unlock(pthread_mutex_t *);
-
-#if !defined(S_ISDIR)
-#define S_ISDIR(x)		((x) & _S_IFDIR)
-#endif /* S_ISDIR */
 
 #if defined(HAVE_STDINT)
 #include <stdint.h>
@@ -895,12 +889,29 @@ pthread_cond_init(pthread_cond_t *cv, const void *unused)
 }
 
 static int
+pthread_cond_timedwait(pthread_cond_t *cv, pthread_mutex_t *mutex,
+	const struct timespec *ts)
+{
+	DWORD	status;
+	DWORD	seconds  = INFINITE;
+	time_t	now;
+	
+	if (ts != NULL) {
+		now = time(NULL);
+		seconds = now > ts->tv_sec ? 0 : ts->tv_sec - now;
+	}
+
+	(void) ReleaseMutex(*mutex);
+	status = WaitForSingleObject(*cv, seconds * 1000);
+	(void) WaitForSingleObject(*mutex, INFINITE);
+	
+	return (status == WAIT_OBJECT_0 ? 0 : -1);
+}
+
+static int
 pthread_cond_wait(pthread_cond_t *cv, pthread_mutex_t *mutex)
 {
-	(void) ReleaseMutex(*mutex);
-	(void) WaitForSingleObject(*cv, INFINITE);
-	(void) WaitForSingleObject(*mutex, INFINITE);
-	return (0);
+	return (pthread_cond_timedwait(cv, mutex, NULL));
 }
 
 static int
@@ -918,7 +929,7 @@ pthread_cond_destroy(pthread_cond_t *cv)
 static pthread_t
 pthread_self(void)
 {
-	return ((pthread_t) GetCurrentThread());
+	return (GetCurrentThreadId());
 }
 
 /*
@@ -974,6 +985,7 @@ to_unicode(const char *path, wchar_t *wbuf, size_t wbuf_len)
 }
 
 #ifdef _WIN32_WCE
+
 static time_t
 time(time_t *ptime)
 {
@@ -1039,79 +1051,6 @@ localtime(const time_t *ptime, struct tm *ptm)
 	return ptm;
 }
 
-static int
-write(int fd, const void *buffer, unsigned count)
-{
-	DWORD	dwWritten;
-
-	if (WriteFile((HANDLE) fd, buffer, count, &dwWritten, NULL))
-		return ((int) dwWritten);
-	else
-		return (-1);
-}
-
-static int
-read(int fd, void *buffer, unsigned count)
-{
-	DWORD	dwRead;
-
-	if (ReadFile((HANDLE)fd, buffer, count, &dwRead, NULL))
-		return ((int) dwRead);
-	else
-		return (-1);
-}
-
-static int
-open(const char *filename, int oflag, int pmode)
-{
-	HANDLE	hFile;
-	DWORD	dwAccess = 0;
-	DWORD	dwCreate = OPEN_EXISTING;
-	DWORD	dwShare = 0;
-	wchar_t	wbuf[FILENAME_MAX];
-
-	to_unicode(filename, wbuf, ARRAY_SIZE(wbuf));
-
-	pmode = 0; // unused
-
-	if (oflag & O_RDONLY) {
-		dwAccess |= GENERIC_READ;
-		dwShare = FILE_SHARE_READ;
-	}
-	if (oflag & O_WRONLY)
-		dwAccess |= GENERIC_WRITE;
-	if (oflag & O_CREAT)
-		dwCreate = OPEN_ALWAYS;
-	if (oflag & O_TRUNC)
-		dwCreate = CREATE_ALWAYS;
-
-	hFile = CreateFileW(wbuf, dwAccess, dwShare, NULL,
-	    dwCreate, FILE_ATTRIBUTE_NORMAL, NULL);
-
-	if (hFile == INVALID_HANDLE_VALUE)
-		return (-1);
-
-	return ((int) hFile);
-}
-
-static long
-lseek(int fd, long offset, int origin)
-{
-	DWORD	dwPos;
-
-	dwPos = SetFilePointer((HANDLE)fd, offset, NULL, origin);
-
-	if (dwPos == INVALID_SET_FILE_POINTER)
-		return (-1);
-
-	return ((int) dwPos);
-}
-
-static int
-close(int fd)
-{
-	return (CloseHandle((HANDLE) fd) == 0 ? -1 : 0)
-}
 
 static int
 rename(const char* oldname, const char* newname)
