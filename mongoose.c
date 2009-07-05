@@ -893,16 +893,16 @@ pthread_cond_timedwait(pthread_cond_t *cv, pthread_mutex_t *mutex,
 	const struct timespec *ts)
 {
 	DWORD	status;
-	DWORD	seconds  = INFINITE;
+	DWORD	msec = INFINITE;
 	time_t	now;
 	
 	if (ts != NULL) {
 		now = time(NULL);
-		seconds = now > ts->tv_sec ? 0 : ts->tv_sec - now;
+		msec = 1000 * (now > ts->tv_sec ? 0 : ts->tv_sec - now);
 	}
 
 	(void) ReleaseMutex(*mutex);
-	status = WaitForSingleObject(*cv, seconds * 1000);
+	status = WaitForSingleObject(*cv, msec);
 	(void) WaitForSingleObject(*mutex, INFINITE);
 	
 	return (status == WAIT_OBJECT_0 ? 0 : -1);
