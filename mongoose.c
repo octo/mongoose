@@ -4613,6 +4613,10 @@ mg_stop(struct mg_context *ctx)
 
 	assert(ctx->num_threads == 0);
 	free(ctx);
+
+#if defined(_WIN32)
+	(void) WSACleanup();
+#endif /* _WIN32 */
 }
 
 struct mg_context *
