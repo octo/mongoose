@@ -375,7 +375,8 @@ enum mg_option_index {
  */
 struct socket {
 	SOCKET		sock;		/* Listening socket		*/
-	struct usa	usa;		/* Socket address		*/
+	struct usa	lsa;		/* Local socket address		*/
+	struct usa	rsa;		/* Remote socket address	*/
 	bool_t		is_ssl;		/* Is socket SSL-ed		*/
 };
 
@@ -434,7 +435,6 @@ struct mg_connection {
 	struct mg_context *ctx;		/* Mongoose context we belong to*/
 	SSL		*ssl;		/* SSL descriptor		*/
 	struct socket	client;		/* Connected client		*/
-	struct usa	lsa;		/* Local socket address		*/
 	time_t		birth_time;	/* Time connection was accepted	*/
 	bool_t		free_post_data;	/* post_data was malloc-ed	*/
 	bool_t		embedded_auth;	/* Used for authorization	*/
@@ -489,7 +489,7 @@ builtin_error_log(struct mg_connection *conn,
 	(void) fprintf(fp,
 	    "[%010lu] [error] [client %s] ",
 	    (unsigned long) timestamp,
-	    inet_ntoa(conn->client.usa.u.sin.sin_addr));
+	    inet_ntoa(conn->client.rsa.u.sin.sin_addr));
 
 	if (request_info->request_method != NULL)
 		(void) fprintf(fp, "%s %s: ",
@@ -1701,34 +1701,33 @@ convert_uri_to_file_name(struct mg_connection *conn, const char *uri,
  * Address format: [local_ip_address:]port_number
  */
 static SOCKET
-mg_open_listening_port(struct mg_context *ctx, const char *str)
+mg_open_listening_port(struct mg_context *ctx, const char *str, struct usa *usa)
 {
 	SOCKET		sock;
 	int		on = 1, a, b, c, d, port;
-	struct usa	sa;
 
 	/* MacOS needs that. If we do not zero it, bind() will fail. */
-	(void) memset(&sa, 0, sizeof(sa));
+	(void) memset(usa, 0, sizeof(*usa));
 
 	if (sscanf(str, "%d.%d.%d.%d:%d", &a, &b, &c, &d, &port) == 5) {
 		/* IP address to bind to is specified */
-		sa.u.sin.sin_addr.s_addr =
+		usa->u.sin.sin_addr.s_addr =
 		    htonl((a << 24) | (b << 16) | (c << 8) | d);
 	} else if (sscanf(str, "%d", &port) == 1) {
 		/* Only port number is specified. Bind to all addresses */
-		sa.u.sin.sin_addr.s_addr = htonl(INADDR_ANY);
+		usa->u.sin.sin_addr.s_addr = htonl(INADDR_ANY);
 	} else {
 		return (INVALID_SOCKET);
 	}
 
-	sa.len				= sizeof(sa.u.sin);
-	sa.u.sin.sin_family		= AF_INET;
-	sa.u.sin.sin_port		= htons((uint16_t) port);
+	usa->len			= sizeof(usa->u.sin);
+	usa->u.sin.sin_family		= AF_INET;
+	usa->u.sin.sin_port		= htons((uint16_t) port);
 
 	if ((sock = socket(PF_INET, SOCK_STREAM, 6)) != INVALID_SOCKET &&
 	    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
 	    (char *) &on, sizeof(on)) == 0 &&
-	    bind(sock, &sa.u.sa, sa.len) == 0 &&
+	    bind(sock, &usa->u.sa, usa->len) == 0 &&
 	    listen(sock, 128) == 0) {
 		/* Success */
 		set_close_on_exec(sock);
@@ -3176,12 +3175,12 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 	addenv(blk, "%s", "GATEWAY_INTERFACE=CGI/1.1");
 	addenv(blk, "%s", "SERVER_PROTOCOL=HTTP/1.1");
 	addenv(blk, "%s", "REDIRECT_STATUS=200");	/* PHP */
-	addenv(blk, "SERVER_PORT=%d", ntohs(conn->lsa.u.sin.sin_port));
+	addenv(blk, "SERVER_PORT=%d", ntohs(conn->client.lsa.u.sin.sin_port));
 	addenv(blk, "SERVER_ROOT=%s", root);
 	addenv(blk, "DOCUMENT_ROOT=%s", root);
 	addenv(blk, "REQUEST_METHOD=%s", conn->request_info.request_method);
 	addenv(blk, "REMOTE_ADDR=%s",
-	    inet_ntoa(conn->client.usa.u.sin.sin_addr));
+	    inet_ntoa(conn->client.rsa.u.sin.sin_addr));
 	addenv(blk, "REMOTE_PORT=%d", conn->request_info.remote_port);
 	addenv(blk, "REQUEST_URI=%s", conn->request_info.uri);
 	addenv(blk, "SCRIPT_NAME=%s", prog + strlen(root));
@@ -3717,6 +3716,7 @@ set_ports_option(struct mg_context *ctx, const char *list)
 	SOCKET		sock;
 	int		is_ssl;
 	struct vec	vec;
+	struct socket	*listener;
 
 	close_all_listening_sockets(ctx);
 	assert(ctx->num_listeners == 0);
@@ -3724,13 +3724,14 @@ set_ports_option(struct mg_context *ctx, const char *list)
 	while ((list = next_option(list, &vec, NULL)) != NULL) {
 
 		is_ssl	= vec.ptr[vec.len - 1] == 's' ? TRUE : FALSE;
+		listener = ctx->listeners + ctx->num_listeners;
 
 		if (ctx->num_listeners >=
 		    (int) (ARRAY_SIZE(ctx->listeners) - 1)) {
 			cry(fc(ctx), "%s", "Too many listeninig sockets");
 			return (FALSE);
-		} else if ((sock = mg_open_listening_port(ctx, vec.ptr)) ==
-		    INVALID_SOCKET) {
+		} else if ((sock = mg_open_listening_port(ctx,
+		    vec.ptr, &listener->lsa)) == INVALID_SOCKET) {
 			cry(fc(ctx), "cannot bind to %.*s", vec.len, vec.ptr);
 			return (FALSE);
 		} else if (is_ssl == TRUE && ctx->ssl_ctx == NULL) {
@@ -3739,8 +3740,8 @@ set_ports_option(struct mg_context *ctx, const char *list)
 			    "-ssl_cert option BEFORE -ports option");
 			return (FALSE);
 		} else {
-			ctx->listeners[ctx->num_listeners].sock = sock;
-			ctx->listeners[ctx->num_listeners].is_ssl = is_ssl;
+			listener->sock = sock;
+			listener->is_ssl = is_ssl;
 			ctx->num_listeners++;
 		}
 	}
@@ -3778,7 +3779,7 @@ log_access(const struct mg_connection *conn)
 
 	(void) fprintf(conn->ctx->access_log,
 	    "%s - %s [%s] \"%s %s HTTP/%d.%d\" %d %" UINT64_FMT "u",
-	    inet_ntoa(conn->client.usa.u.sin.sin_addr),
+	    inet_ntoa(conn->client.rsa.u.sin.sin_addr),
 	    ri->remote_user == NULL ? "-" : ri->remote_user,
 	    date,
 	    ri->request_method ? ri->request_method : "-",
@@ -4413,7 +4414,7 @@ process_new_connection(struct mg_connection *conn)
 	/* 0-terminate the request: parse_request uses sscanf */
 	buf[request_len - 1] = '\0';
 
-	if (parse_http_request(buf, ri, &conn->client.usa)) {
+	if (parse_http_request(buf, ri, &conn->client.rsa)) {
 		if (ri->http_version_major != 1 ||
 		    (ri->http_version_major == 1 &&
 		    (ri->http_version_minor < 0 ||
@@ -4564,16 +4565,17 @@ accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 {
 	struct socket		accepted;
 
-	accepted.usa.len = sizeof(accepted.usa.u.sin);
+	accepted.rsa.len = sizeof(accepted.rsa.u.sin);
+	accepted.lsa = listener->lsa;
 	if ((accepted.sock = accept(listener->sock,
-	    &accepted.usa.u.sa, &accepted.usa.len)) == INVALID_SOCKET)
+	    &accepted.rsa.u.sa, &accepted.rsa.len)) == INVALID_SOCKET)
 		return;
 
 	lock_option(ctx, OPT_ACL);
 	if (ctx->options[OPT_ACL] != NULL &&
-	    !check_acl(ctx, ctx->options[OPT_ACL], &accepted.usa)) {
+	    !check_acl(ctx, ctx->options[OPT_ACL], &accepted.rsa)) {
 		cry(fc(ctx), "%s: %s is not allowed to connect",
-		    __func__, inet_ntoa(accepted.usa.u.sin.sin_addr));
+		    __func__, inet_ntoa(accepted.rsa.u.sin.sin_addr));
 		(void) closesocket(accepted.sock);
 		unlock_option(ctx, OPT_ACL);
 		return;
