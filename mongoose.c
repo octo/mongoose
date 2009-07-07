@@ -2433,6 +2433,7 @@ check_authorization(struct mg_connection *conn, const char *path)
 static void
 send_authorization_request(struct mg_connection *conn)
 {
+	conn->request_info.status_code = 401;
 	(void) mg_printf(conn,
 	    "HTTP/1.1 401 Unauthorized\r\n"
 	    "WWW-Authenticate: Digest qop=\"auth\", "
@@ -3418,7 +3419,8 @@ put_file(struct mg_connection *conn, const char *path)
 		send_error(conn, 501, "Not Implemented",
 		    "%s", "Range support for PUT requests is not implemented");
 	} else if ((rc = put_dir(path)) == 0) {
-		send_error(conn, 200, "OK", "");
+		(void) mg_printf(conn, "HTTP/1.1 %d OK\r\n\r\n",
+		    conn->request_info.status_code);
 	} else if (rc == -1) {
 		send_error(conn, 500, http_500_error,
 		    "put_dir(%s): %s", path, strerror(ERRNO));
@@ -3428,8 +3430,8 @@ put_file(struct mg_connection *conn, const char *path)
 	} else {
 		set_close_on_exec(fileno(fp));
 		if (handle_request_body(conn, fp))
-			send_error(conn, conn->request_info.status_code,
-			    "OK", "");
+			(void) mg_printf(conn, "HTTP/1.1 %d OK\r\n\r\n",
+			    conn->request_info.status_code);
 		(void) fclose(fp);
 	}
 }
@@ -4310,10 +4312,14 @@ admin_page(struct mg_connection *conn, const struct mg_request_info *ri,
 static void
 reset_per_request_attributes(struct mg_connection *conn)
 {
-	if (conn->request_info.remote_user != NULL)
-		free(conn->request_info.remote_user);
-	if (conn->free_post_data && conn->request_info.post_data != NULL)
-		free((void *)conn->request_info.post_data);
+	if (conn->request_info.remote_user != NULL) {
+		free((void *) conn->request_info.remote_user);
+		conn->request_info.remote_user = NULL;
+	}
+	if (conn->free_post_data && conn->request_info.post_data != NULL) {
+		free((void *) conn->request_info.post_data);
+		conn->request_info.post_data = NULL;
+	}
 }
 
 static void
@@ -4345,11 +4351,12 @@ static void
 close_connection(struct mg_connection *conn)
 {
 	reset_per_request_attributes(conn);
+
 	if (conn->ssl)
 		SSL_free(conn->ssl);
-	if (conn->client.sock != INVALID_SOCKET) {
+
+	if (conn->client.sock != INVALID_SOCKET)
 		close_socket_gracefully(conn, conn->client.sock);
-	}
 }
 
 static void
