@@ -2549,13 +2549,13 @@ print_dir_entry(struct de *de)
 			    "%lu", (unsigned long) de->st.size);
 		else if (de->st.size < 1024 * 1024)
 			(void) mg_snprintf(de->conn, size, sizeof(size),
-			    "%.1fk", (double) (signed) de->st.size / 1024.0);
+			    "%.1fk", (double) de->st.size / 1024.0);
 		else if (de->st.size < 1024 * 1024 * 1024)
 			(void) mg_snprintf(de->conn, size, sizeof(size),
-			    "%.1fM", (double) (signed) de->st.size / 1048576);
+			    "%.1fM", (double) de->st.size / 1048576);
 		else
 			(void) mg_snprintf(de->conn, size, sizeof(size),
-			  "%.1fG", (double) (signed) de->st.size / 1073741824);
+			  "%.1fG", (double) de->st.size / 1073741824);
 	}
 	(void) strftime(mod, sizeof(mod), "%d-%b-%Y %H:%M",
 		localtime(&de->st.mtime));
