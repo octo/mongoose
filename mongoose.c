@@ -2532,6 +2532,28 @@ struct de {
 	struct mgstat		st;
 };
 
+static void
+url_encode(const char *src, char *dst, size_t dst_len)
+{
+	const char	*dont_escape = "._-$,;~()";
+	const char	*hex = "0123456789abcdef";
+	const char	*end = dst + dst_len - 1;
+	
+	for (; *src != '\0' && dst < end; src++, dst++) {
+		if (isalnum(*(unsigned char *) src) ||
+		    strchr(dont_escape, * (unsigned char *) src) != NULL) {
+			*dst = *src;
+		} else if (dst + 2 < end) {
+			dst[0] = '%';
+			dst[1] = hex[(* (unsigned char *) src) >> 4];
+			dst[2] = hex[(* (unsigned char *) src) & 0xf];
+			dst += 2;
+		}
+	}
+
+	*dst = '\0';
+}
+
 /*
  * This function is called from send_directory() and prints out
  * single directory entry.
@@ -2539,7 +2561,7 @@ struct de {
 static void
 print_dir_entry(struct de *de)
 {
-	char		size[64], mod[64];
+	char		size[64], mod[64], href[FILENAME_MAX];
 
 	if (de->st.is_directory) {
 		(void) mg_snprintf(de->conn,
@@ -2564,11 +2586,14 @@ print_dir_entry(struct de *de)
 	}
 	(void) strftime(mod, sizeof(mod), "%d-%b-%Y %H:%M",
 		localtime(&de->st.mtime));
+
+	url_encode(de->file_name, href, sizeof(href));
+
 	de->conn->num_bytes_sent += mg_printf(de->conn,
-	    "<tr><td><a href=\"%s%s\">%s%s</a></td>"
+	    "<tr><td><a href=\"%s%s%s\">%s%s</a></td>"
 	    "<td>&nbsp;%s</td><td>&nbsp;&nbsp;%s</td></tr>\n",
-	    de->conn->request_info.uri, de->file_name, de->file_name,
-	    de->st.is_directory ? "/" : "", mod, size);
+	    de->conn->request_info.uri, href, de->st.is_directory ? "/" : "",
+	    de->file_name, de->st.is_directory ? "/" : "", mod, size);
 }
 
 /*
