@@ -186,7 +186,6 @@ typedef struct DIR {
 #define	mg_mkdir(x, y)		mkdir(x, y)
 #define	mg_remove(x)		remove(x)
 #define	mg_rename(x, y)		rename(x, y)
-#define	mg_getcwd(x, y)		getcwd(x, y)
 #define	ERRNO			errno
 #define	INVALID_SOCKET		(-1)
 #define UINT64_FMT		"ll"
@@ -1117,23 +1116,6 @@ mg_mkdir(const char *path, int mode)
 	(void) MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, sizeof(wbuf));
 
 	return (CreateDirectoryW(wbuf, NULL) ? 0 : -1);
-}
-
-static char *
-mg_getcwd(char *buf, int buf_len)
-{
-	wchar_t		wbuf[FILENAME_MAX], *basename;
-
-	if (GetModuleFileNameW(NULL, wbuf, ARRAY_SIZE(wbuf))) {
-		if ((basename = wcsrchr(wbuf, DIRSEP)) != NULL) {
-			*basename = L'\0';
-			if (WideCharToMultiByte(CP_UTF8, 0, wbuf, -1, buf,
-			    buf_len, NULL, NULL) > 0)
-				return (buf);
-		}
-	}
-
-	return (NULL);
 }
 
 /*
@@ -4162,7 +4144,7 @@ set_kv_list_option(struct mg_context *ctx, const char *str)
 }
 
 static const struct mg_option known_options[] = {
-	{"root", "\tWeb root directory", NULL, OPT_ROOT, NULL},
+	{"root", "\tWeb root directory", ".", OPT_ROOT, NULL},
 	{"index_files",	"Index files", "index.html,index.htm,index.cgi",
 		OPT_INDEX_FILES, NULL},
 #if !defined(NO_SSL)
@@ -4685,7 +4667,6 @@ mg_start(void)
 {
 	struct mg_context	*ctx;
 	const struct mg_option	*option;
-	char			web_root[FILENAME_MAX];
 	int			i;
 
 #if defined(_WIN32)
@@ -4715,16 +4696,6 @@ mg_start(void)
 				mg_fini(ctx);
 				return (NULL);
 			}
-
-	/* Initial document root is set to current working directory */
-	if (ctx->options[OPT_ROOT] == NULL) {
-		if (mg_getcwd(web_root, sizeof(web_root)) == NULL) {
-			cry(fc(ctx), "%s: getcwd: %s",
-			    __func__, strerror(errno));
-			mg_strlcpy(web_root, ".", sizeof(web_root));
-		}
-		ctx->options[OPT_ROOT] = mg_strdup(web_root);
-	}
 
 	DEBUG_TRACE((DEBUG_MGS_PREFIX "%s: root [%s]",
 	    __func__, ctx->options[OPT_ROOT]));
