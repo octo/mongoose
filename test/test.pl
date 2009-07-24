@@ -213,6 +213,8 @@ write_file($path, read_file($root . $dir_separator . 'env.cgi'));
 chmod 0755, $path;
 o("GET /$test_dir_uri/x/ HTTP/1.0\n\n", "Content-Type: text/html\r\n\r\n",
 		'index.cgi execution');
+o("GET /ta/x/ HTTP/1.0\n\n", "SCRIPT_NAME=/ta/x/index.cgi",
+		'Aliases SCRIPT_NAME');
 
 my $mime_types = {
 	html => 'text/html',

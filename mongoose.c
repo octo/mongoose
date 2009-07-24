@@ -3165,7 +3165,7 @@ static void
 prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 		struct cgi_env_block *blk)
 {
-	const char	*s, *script_filename, *root;
+	const char	*s, *script_filename, *root, *slash;
 	struct vec	var_vec;
 	char		*p;
 	int		i;
@@ -3195,7 +3195,12 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 	    inet_ntoa(conn->client.rsa.u.sin.sin_addr));
 	addenv(blk, "REMOTE_PORT=%d", conn->request_info.remote_port);
 	addenv(blk, "REQUEST_URI=%s", conn->request_info.uri);
-	addenv(blk, "SCRIPT_NAME=%s", prog + strlen(root));
+
+	slash = strrchr(conn->request_info.uri, '/');
+	addenv(blk, "SCRIPT_NAME=%.*s%s",
+	    (slash - conn->request_info.uri) + 1, conn->request_info.uri,
+	    script_filename);
+
 	addenv(blk, "SCRIPT_FILENAME=%s", script_filename);	/* PHP */
 	addenv(blk, "PATH_TRANSLATED=%s", prog);
 	addenv(blk, "HTTPS=%s", conn->ssl == NULL ? "off" : "on");
@@ -4575,7 +4580,7 @@ put_socket(struct mg_context *ctx, const struct socket *sp)
 static void
 accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 {
-	struct socket		accepted;
+	struct socket	accepted;
 
 	accepted.rsa.len = sizeof(accepted.rsa.u.sin);
 	accepted.lsa = listener->lsa;
