@@ -962,7 +962,10 @@ to_unicode(const char *path, wchar_t *wbuf, size_t wbuf_len)
 	 * some garbage in the end of file name. So fopen("a.cgi    ", "r")
 	 * actually opens "a.cgi", and does not return an error!
 	 */
-	if (*p == 0x20 || *p == 0x2e || *p == 0x2b || (*p & ~0x7f)) {
+	if (*p == 0x20 ||               /* No space at the end */
+	    (*p == 0x2e && p > buf) ||  /* No '.' but allow '.' as full path */
+	    *p == 0x2b ||               /* No '+' */
+	    (*p & ~0x7f)) {             /* And generally no non-ascii chars */
 		(void) fprintf(stderr, "Rejecting suspicious path: [%s]", buf);
 		buf[0] = '\0';
 	}
@@ -1678,6 +1681,8 @@ convert_uri_to_file_name(struct mg_connection *conn, const char *uri,
 #ifdef _WIN32
 	fix_directory_separators(buf);
 #endif /* _WIN32 */
+
+	DEBUG_TRACE((DEBUG_MGS_PREFIX "%s: [%s] -> [%s]", __func__, uri, buf));
 }
 
 /*
