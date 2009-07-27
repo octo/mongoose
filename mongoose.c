@@ -77,13 +77,16 @@ typedef long off_t;
 /*
  * Visual Studio 6 does not know __func__ or __FUNCTION__
  * The rest of MS compilers use __FUNCTION__, not C99 __func__
+ * Also use _strtoui64 on modern M$ compilers
  */
 #if defined(_MSC_VER) && _MSC_VER < 1300
 #define	STRX(x)			#x
 #define	STR(x)			STRX(x)
 #define	__func__		"line " STR(__LINE__)
+#define	strtoull(x, y, z)	strtoul(x, y, z)
 #else
 #define	__func__		__FUNCTION__
+#define	strtoull(x, y, z)	_strtoui64(x, y, z)
 #endif /* _MSC_VER */
 
 #define	ERRNO			GetLastError()
@@ -112,12 +115,6 @@ typedef long off_t;
 #define	read(x, y, z)		_read((x), (y), (unsigned) z)
 #define	flockfile(x)		(void) 0
 #define	funlockfile(x)		(void) 0
-
-#ifdef HAVE_STRTOUI64
-#define	strtoull(x, y, z)	_strtoui64(x, y, z)
-#else
-#define	strtoull(x, y, z)	strtoul(x, y, z)
-#endif /* HAVE_STRTOUI64 */
 
 #if !defined(fileno)
 #define	fileno(x)		_fileno(x)
