@@ -1717,7 +1717,7 @@ mg_open_listening_port(struct mg_context *ctx, const char *str, struct usa *usa)
 	    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
 	    (char *) &on, sizeof(on)) == 0 &&
 	    bind(sock, &usa->u.sa, usa->len) == 0 &&
-	    listen(sock, 128) == 0) {
+	    listen(sock, 20) == 0) {
 		/* Success */
 		set_close_on_exec(sock);
 	} else {
