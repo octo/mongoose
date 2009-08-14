@@ -2660,7 +2660,17 @@ send_directory(struct mg_connection *conn, const char *dir)
 		(void) mg_snprintf(conn, path, sizeof(path), "%s%c%s",
 		    dir, DIRSEP, dp->d_name);
 
-		(void) mg_stat(path, &entries[num_entries].st);
+		/*
+		 * If we don't memset stat structure to zero, mtime will have
+		 * garbage and strftime() will segfault later on in
+		 * print_dir_entry(). memset is required only if mg_stat()
+		 * fails. For more details, see
+		 * http://code.google.com/p/mongoose/issues/detail?id=79
+		 */
+		if (mg_stat(path, &entries[num_entries].st) != 0)
+			(void) memset(&entries[num_entries].st, 0,
+			    sizeof(entries[num_entries].st));
+
 		entries[num_entries].conn = conn;
 		entries[num_entries].file_name = mg_strdup(dp->d_name);
 		num_entries++;
