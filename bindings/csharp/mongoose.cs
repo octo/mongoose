@@ -33,7 +33,8 @@ using System.Runtime.InteropServices;
 [StructLayout(LayoutKind.Sequential)] public struct MongooseRequestInfo {
 	public string	request_method;
 	public string	uri;
-	public string	post_data;
+	public string	query_string;
+	public IntPtr	post_data;
 	public string	remote_user;
 	public long	remote_ip;
 	public int	remote_port;
