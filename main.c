@@ -38,6 +38,7 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <winsvc.h>
+#define	CDECL_CONVENTION	__cdecl
 #define DIRSEP			'\\'
 #define	snprintf		_snprintf
 #if !defined(__LCC__)
@@ -47,6 +48,7 @@
 #else
 #include <sys/wait.h>
 #include <unistd.h>		/* For pause() */
+#define	CDECL_CONVENTION
 #define DIRSEP '/'
 #endif /* _WIN32 */
 
@@ -56,7 +58,7 @@ static int exit_flag;	                /* Program termination flag	*/
 #define	CONFIG_FILE		"mongoose.conf"
 #endif /* !CONFIG_FILE */
 
-static void
+static void CDECL_CONVENTION
 signal_handler(int sig_num)
 {
 #if !defined(_WIN32)
@@ -169,7 +171,7 @@ process_command_line_arguments(struct mg_context *ctx, char *argv[])
 			exit(EXIT_FAILURE);
 }
 
-int
+int CDECL_CONVENTION
 main(int argc, char *argv[])
 {
 	struct mg_context	*ctx;

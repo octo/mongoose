@@ -111,6 +111,7 @@ typedef long off_t;
 #define	dlsym(x,y)		GetProcAddress((HINSTANCE) (x), (y))
 #define	RTLD_LAZY		0
 #define	fseeko(x, y, z)		fseek((x), (y), (z))
+#define	fdopen(x, y)		_fdopen((x), (y))
 #define	write(x, y, z)		_write((x), (y), (unsigned) z)
 #define	read(x, y, z)		_read((x), (y), (unsigned) z)
 #define	flockfile(x)		(void) 0
@@ -2585,6 +2586,9 @@ print_dir_entry(struct de *de)
  * sorting direcotory entries by size, or name, or modification time.
  */
 static int
+#if defined(_WIN32)
+__cdecl
+#endif /* _WIN32 */
 compare_dir_entries(const void *p1, const void *p2)
 {
 	const struct de	*a = (struct de *) p1, *b = (struct de *) p2;
