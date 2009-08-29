@@ -124,7 +124,7 @@ typedef long off_t;
 typedef HANDLE pthread_mutex_t;
 typedef HANDLE pthread_cond_t;
 typedef DWORD pthread_t;
-typedef HANDLE pid_t;
+#define pid_t HANDLE	/* MINGW typedefs pid_t to int. Using #define here. */
 
 struct timespec {
 	long tv_nsec;
