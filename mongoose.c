@@ -2821,7 +2821,7 @@ parse_http_headers(char **buf, struct mg_request_info *ri)
 }
 
 static bool_t
-is_known_http_method(const char *method)
+is_valid_http_method(const char *method)
 {
 	return (!strcmp(method, "GET") ||
 	    !strcmp(method, "POST") ||
@@ -2836,18 +2836,16 @@ is_known_http_method(const char *method)
 static bool_t
 parse_http_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
 {
-	char	*http_version;
-	int	n, success_code = FALSE;
+	int	success_code = FALSE;
 
 	ri->request_method = skip(&buf, " ");
 	ri->uri = skip(&buf, " ");
-	http_version = skip(&buf, "\r\n");
+	ri->http_version = skip(&buf, "\r\n");
 
-	if (is_known_http_method(ri->request_method) &&
+	if (is_valid_http_method(ri->request_method) &&
 	    ri->uri[0] == '/' &&
-	    sscanf(http_version, "HTTP/%d.%d%n",
-	    &ri->http_version_major, &ri->http_version_minor, &n) == 2 &&
-	    http_version[n] == '\0') {
+	    strncmp(ri->http_version, "HTTP/", 5) == 0) {
+		ri->http_version += 5;   /* Skip "HTTP/" */
 		parse_http_headers(&buf, ri);
 		ri->remote_port = ntohs(usa->u.sin.sin_port);
 		(void) memcpy(&ri->remote_ip, &usa->u.sin.sin_addr.s_addr, 4);
@@ -3808,13 +3806,13 @@ log_access(const struct mg_connection *conn)
 	flockfile(conn->ctx->access_log);
 
 	(void) fprintf(conn->ctx->access_log,
-	    "%s - %s [%s] \"%s %s HTTP/%d.%d\" %d %" UINT64_FMT "u",
+	    "%s - %s [%s] \"%s %s HTTP/%s\" %d %" UINT64_FMT "u",
 	    inet_ntoa(conn->client.rsa.u.sin.sin_addr),
 	    ri->remote_user == NULL ? "-" : ri->remote_user,
 	    date,
 	    ri->request_method ? ri->request_method : "-",
 	    ri->uri ? ri->uri : "-",
-	    ri->http_version_major, ri->http_version_minor,
+	    ri->http_version,
 	    conn->request_info.status_code, conn->num_bytes_sent);
 	log_header(conn, "Referer", conn->ctx->access_log);
 	log_header(conn, "User-Agent", conn->ctx->access_log);
@@ -4445,10 +4443,8 @@ process_new_connection(struct mg_connection *conn)
 	buf[request_len - 1] = '\0';
 
 	if (parse_http_request(buf, ri, &conn->client.rsa)) {
-		if (ri->http_version_major != 1 ||
-		    (ri->http_version_major == 1 &&
-		    (ri->http_version_minor < 0 ||
-		    ri->http_version_minor > 1))) {
+		if (strcmp(ri->http_version, "1.0") != 0 &&
+		    strcmp(ri->http_version, "1.1") != 0) {
 			send_error(conn, 505,
 			    "HTTP version not supported",
 			    "%s", "Weird HTTP version");

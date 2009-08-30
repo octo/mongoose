@@ -40,14 +40,13 @@ struct mg_connection;	/* Handle for the individual connection	*/
 struct mg_request_info {
 	char	*request_method;	/* "GET", "POST", etc	*/
 	char	*uri;			/* Normalized URI	*/
+	char	*http_version;		/* E.g. "1.0", "1.1"	*/
 	char	*query_string;		/* \0 - terminated	*/
 	char	*post_data;		/* POST data buffer	*/
 	char	*remote_user;		/* Authenticated user	*/
 	long	remote_ip;		/* Client's IP address	*/
 	int	remote_port;		/* Client's port	*/
 	int	post_data_len;		/* POST buffer length	*/
-	int	http_version_major;
-	int	http_version_minor;
 	int	status_code;		/* HTTP status code	*/
 	int	num_headers;		/* Number of headers	*/
 	struct mg_header {
@@ -195,6 +194,11 @@ int mg_write(struct mg_connection *, const void *buf, int len);
  */
 int mg_printf(struct mg_connection *, const char *fmt, ...);
 
+
+/*
+ * Read data from the remote or local end.
+ */
+int mg_read(struct mg_connection *, int local, void *buf, int len);
 
 /*
  * Get the value of particular HTTP header.

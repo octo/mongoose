@@ -186,8 +186,8 @@ o("GET /hh HTTP/1.0\n\n", 'HTTP/1.1 200 OK', 'GET admin URI');
 
 # Test HTTP version parsing
 o("GET / HTTPX/1.0\r\n\r\n", '400 Bad Request', 'Bad HTTP Version', 0);
-o("GET / HTTP/x.1\r\n\r\n", '400 Bad Request', 'Bad HTTP maj Version', 0);
-o("GET / HTTP/1.1z\r\n\r\n", '400 Bad Request', 'Bad HTTP min Version', 0);
+o("GET / HTTP/x.1\r\n\r\n", '505 HTTP', 'Bad HTTP maj Version');
+o("GET / HTTP/1.1z\r\n\r\n", '505 HTTP', 'Bad HTTP min Version');
 o("GET / HTTP/02.0\r\n\r\n", '505 HTTP version not supported',
 	'HTTP Version >1.1');
 
@@ -435,7 +435,7 @@ sub do_embedded_test {
 	o("POST /test_get_request_info?xx=yy HTTP/1.0\nFoo: bar\n".
 		"Content-Length: 3\n\na=b",
 		'Method: \[POST\].URI: \[/test_get_request_info\].'.
-		'HTTP version: \[1/0\].HTTP header \[Foo\]: \[bar\].'.
+		'HTTP version: \[1.0\].HTTP header \[Foo\]: \[bar\].'.
 		'HTTP header \[Content-Length\]: \[3\].'.
 		'Query string: \[xx=yy\].POST data: \[a=b\].'.
 		'Remote IP: \[\d+\].Remote port: \[\d+\].'.

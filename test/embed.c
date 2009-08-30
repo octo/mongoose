@@ -86,9 +86,7 @@ test_get_ri(struct mg_connection *conn, const struct mg_request_info *ri,
 
 	mg_printf(conn, "Method: [%s]\n", ri->request_method);
 	mg_printf(conn, "URI: [%s]\n", ri->uri);
-	mg_printf(conn, "HTTP version: [%d/%d]\n",
-			ri->http_version_major,
-			ri->http_version_minor);
+	mg_printf(conn, "HTTP version: [%s]\n", ri->http_version);
 
 	for (i = 0; i < ri->num_headers; i++)
 		mg_printf(conn, "HTTP header [%s]: [%s]\n",

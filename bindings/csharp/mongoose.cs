@@ -33,14 +33,13 @@ using System.Runtime.InteropServices;
 [StructLayout(LayoutKind.Sequential)] public struct MongooseRequestInfo {
 	public string	request_method;
 	public string	uri;
+	public string	http_version;
 	public string	query_string;
 	public IntPtr	post_data;
 	public string	remote_user;
 	public long	remote_ip;
 	public int	remote_port;
 	public int	post_data_len;
-	public int	http_version_major;
-	public int	http_version_minor;
 	public int	status_code;
 	public int	num_headers;
 	[MarshalAs(UnmanagedType.ByValArray,SizeConst=64)] public MongooseHeader[] http_headers;
