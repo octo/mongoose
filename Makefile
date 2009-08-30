@@ -57,7 +57,7 @@ solaris:
 
 #WINDBG=	/Zi /DDEBUG /Od /DDEBUG
 WINDBG=	/DNDEBUG /Os
-WINFLAGS=	/MT /TC /nologo /W4 /Gz $(WINDBG) 
+WINFLAGS=	/MT /TC /nologo /W4 $(WINDBG) 
 windows:
 	cl $(WINFLAGS) mongoose.c /link /incremental:no /DLL \
 		/DEF:win32\dll.def /out:_$(PROG).dll ws2_32.lib

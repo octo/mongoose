@@ -2586,9 +2586,6 @@ print_dir_entry(struct de *de)
  * sorting direcotory entries by size, or name, or modification time.
  */
 static int
-#if defined(_WIN32)
-__cdecl
-#endif /* _WIN32 */
 compare_dir_entries(const void *p1, const void *p2)
 {
 	const struct de	*a = (struct de *) p1, *b = (struct de *) p2;
