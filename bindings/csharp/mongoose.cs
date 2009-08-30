@@ -37,7 +37,7 @@ using System.Runtime.InteropServices;
 	public string	query_string;
 	public IntPtr	post_data;
 	public string	remote_user;
-	public long	remote_ip;
+	public int	remote_ip; //int to match the 32bit declaration in c
 	public int	remote_port;
 	public int	post_data_len;
 	public int	status_code;
@@ -46,6 +46,7 @@ using System.Runtime.InteropServices;
 };
 
 // This is a delegate for mg_callback_t from mongoose.h header file
+[UnmanagedFunctionPointer(CallingConvention.Cdecl)]
 public delegate void MongooseCallback2(IntPtr conn, ref MongooseRequestInfo ri, IntPtr user_data);
 
 // This is a delegate to be used by the application
@@ -54,6 +55,9 @@ public delegate void MongooseCallback(MongooseConnection conn, MongooseRequestIn
 public class Mongoose {
 	public string version;
 	private IntPtr ctx;
+    	//These two events are here to store a ref to the callbacks while they are over in unmanaged code. 
+    	private event MongooseCallback2 delegates2;
+    	private event MongooseCallback delegates1;
 
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern IntPtr	mg_start();
 	[DllImport("_mongoose",CallingConvention=CallingConvention.Cdecl)] private static extern void	mg_stop(IntPtr ctx);
@@ -88,10 +92,13 @@ public class Mongoose {
 			MongooseConnection connection = new MongooseConnection(conn, this);
 			func(connection, ri);
 		};
+        	// store a reference to the callback so it won't be GC'ed while its over in unmanged code
+        	delegates2 += callback;
 		mg_set_uri_callback(this.ctx, uri_regex, callback, IntPtr.Zero);
 	}
 	
 	public void set_log_callback(MongooseCallback func) {
+		delegates1 += func;
 		mg_set_log_callback(this.ctx, func);
 	}
 }
