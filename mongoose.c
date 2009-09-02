@@ -98,7 +98,7 @@ typedef long off_t;
 #define	O_NONBLOCK		0
 #define	EWOULDBLOCK		WSAEWOULDBLOCK
 #define	_POSIX_
-#define UINT64_FMT		"I64"
+#define INT64_FMT		"I64"
 
 #define	SHUT_WR			1
 #define	snprintf		_snprintf
@@ -139,12 +139,8 @@ static int pthread_mutex_unlock(pthread_mutex_t *);
 #else
 typedef unsigned int		uint32_t;
 typedef unsigned short		uint16_t;
-#if _MSC_VER > 1200
 typedef unsigned __int64	uint64_t;
-#else
-/* VC6 cannot cast double to unsigned __int64, needed by print_dir_entry() */
-typedef __int64	uint64_t;
-#endif /* _MSC_VER */
+typedef __int64			int64_t;
 #endif /* HAVE_STDINT */
 
 /*
@@ -186,7 +182,7 @@ typedef struct DIR {
 #define	mg_rename(x, y)		rename(x, y)
 #define	ERRNO			errno
 #define	INVALID_SOCKET		(-1)
-#define UINT64_FMT		"ll"
+#define INT64_FMT		"lld"
 typedef int SOCKET;
 
 #endif /* End of Windows and UNIX specific includes */
@@ -201,7 +197,6 @@ typedef int SOCKET;
 #define	MAX_LISTENING_SOCKETS	10
 #define	MAX_CALLBACKS		20
 #define	ARRAY_SIZE(array)	(sizeof(array) / sizeof(array[0]))
-#define	UNKNOWN_CONTENT_LENGTH	((uint64_t) ~0)
 #define	DEBUG_MGS_PREFIX	"*** Mongoose debug *** "
 
 #if defined(DEBUG)
@@ -345,7 +340,7 @@ struct vec {
  */
 struct mgstat {
 	bool_t		is_directory;	/* Directory marker		*/
-	uint64_t	size;		/* File size			*/
+	int64_t		size;		/* File size			*/
 	time_t		mtime;		/* Modification time		*/
 };
 
@@ -440,7 +435,7 @@ struct mg_connection {
 	time_t		birth_time;	/* Time connection was accepted	*/
 	bool_t		free_post_data;	/* post_data was malloc-ed	*/
 	bool_t		embedded_auth;	/* Used for authorization	*/
-	uint64_t	num_bytes_sent;	/* Total bytes sent to client	*/
+	int64_t		num_bytes_sent;	/* Total bytes sent to client	*/
 };
 
 /*
@@ -1016,7 +1011,7 @@ mktime(struct tm *ptm)
 static struct tm *
 localtime(const time_t *ptime, struct tm *ptm)
 {
-	uint64_t	t = ((uint64_t)*ptime) * RATE_DIFF + EPOCH_DIFF;
+	int64_t	t = ((int64_t)*ptime) * RATE_DIFF + EPOCH_DIFF;
 	FILETIME	ft, lft;
 	SYSTEMTIME	st;
 	TIME_ZONE_INFORMATION	tzinfo;
@@ -1024,7 +1019,7 @@ localtime(const time_t *ptime, struct tm *ptm)
 	if (ptm == NULL)
 		return NULL;
 
-	* (uint64_t *) &ft = t;
+	* (int64_t *) &ft = t;
 	FileTimeToLocalFileTime(&ft, &lft);
 	FileTimeToSystemTime(&lft, &st);
 	ptm->tm_year = st.wYear - 1900;
@@ -1454,11 +1449,11 @@ unlock_option(struct mg_context *ctx, int opt_index)
  * Write data to the IO channel - opened file descriptor, socket or SSL
  * descriptor. Return number of bytes written.
  */
-static uint64_t
-push(FILE *fp, SOCKET sock, SSL *ssl, const char *buf, uint64_t len)
+static int64_t
+push(FILE *fp, SOCKET sock, SSL *ssl, const char *buf, int64_t len)
 {
-	uint64_t	sent;
-	int		n, k;
+	int64_t	sent;
+	int	n, k;
 
 	sent = 0;
 	while (sent < len) {
@@ -1512,7 +1507,7 @@ mg_write(struct mg_connection *conn, const void *buf, int len)
 {
 	assert(len >= 0);
 	return ((int) push(NULL, conn->client.sock, conn->ssl,
-				(const char *) buf, (uint64_t) len));
+				(const char *) buf, (int64_t) len));
 }
 
 int
@@ -1530,14 +1525,14 @@ mg_printf(struct mg_connection *conn, const char *fmt, ...)
 }
 
 /*
- * Return content length of the request, or UNKNOWN_CONTENT_LENGTH constant if
+ * Return content length of the request, or -1 constant if
  * Content-Length header is not set.
  */
-static uint64_t
+static int64_t
 get_content_length(const struct mg_connection *conn)
 {
 	const char *cl = mg_get_header(conn, "Content-Length");
-	return (cl == NULL ? UNKNOWN_CONTENT_LENGTH : strtoull(cl, NULL, 10));
+	return (cl == NULL ? -1 : strtoll(cl, NULL, 10));
 }
 
 /*
@@ -2711,7 +2706,7 @@ send_directory(struct mg_connection *conn, const char *dir)
  * Send len bytes from the opened file to the client.
  */
 static void
-send_opened_file_stream(struct mg_connection *conn, FILE *fp, uint64_t len)
+send_opened_file_stream(struct mg_connection *conn, FILE *fp, int64_t len)
 {
 	char	buf[BUFSIZ];
 	int	to_read, num_read, num_written;
@@ -2719,7 +2714,7 @@ send_opened_file_stream(struct mg_connection *conn, FILE *fp, uint64_t len)
 	while (len > 0) {
 		/* Calculate how much to read from the file in the buffer */
 		to_read = sizeof(buf);
-		if ((uint64_t) to_read > len)
+		if ((int64_t) to_read > len)
 			to_read = (int) len;
 
 		/* Read from file, exit the loop on error */
@@ -2745,7 +2740,7 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	char		date[64], lm[64], etag[64], range[64];
 	const char	*fmt = "%a, %d %b %Y %H:%M:%S %Z", *msg = "OK", *hdr;
 	time_t		curtime = time(NULL);
-	uint64_t	cl, r1, r2;
+	int64_t		cl, r1, r2;
 	struct vec	mime_vec;
 	FILE		*fp;
 	int		n;
@@ -2766,14 +2761,14 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	r1 = r2 = 0;
 	hdr = mg_get_header(conn, "Range");
 	if (hdr != NULL && (n = sscanf(hdr,
-	    "bytes=%" UINT64_FMT "u-%" UINT64_FMT "u", &r1, &r2)) > 0) {
+	    "bytes=%" INT64_FMT "-%" INT64_FMT, &r1, &r2)) > 0) {
 		conn->request_info.status_code = 206;
 		(void) fseeko(fp, (off_t) r1, SEEK_SET);
 		cl = n == 2 ? r2 - r1 + 1: cl - r1;
 		(void) mg_snprintf(conn, range, sizeof(range),
 		    "Content-Range: bytes "
-		    "%" UINT64_FMT "u-%"
-		    UINT64_FMT "u/%" UINT64_FMT "u\r\n",
+		    "%" INT64_FMT "-%"
+		    INT64_FMT "/%" INT64_FMT "\r\n",
 		    r1, r1 + cl - 1, stp->size);
 		msg = "Partial Content";
 	}
@@ -2790,7 +2785,7 @@ send_file(struct mg_connection *conn, const char *path, struct mgstat *stp)
 	    "Last-Modified: %s\r\n"
 	    "Etag: \"%s\"\r\n"
 	    "Content-Type: %.*s\r\n"
-	    "Content-Length: %" UINT64_FMT "u\r\n"
+	    "Content-Length: %" INT64_FMT "\r\n"
 	    "Connection: close\r\n"
 	    "Accept-Ranges: bytes\r\n"
 	    "%s\r\n",
@@ -3036,7 +3031,7 @@ append_chunk(struct mg_request_info *ri, FILE *fp, const char *buf, int len)
 		(void) memcpy(ri->post_data + ri->post_data_len, buf, len);
 		ri->post_data_len += len;
 	} else if (push(fp, INVALID_SOCKET,
-	    NULL, buf, (uint64_t) len) != (uint64_t) len) {
+	    NULL, buf, (int64_t) len) != (int64_t) len) {
 		ret_code = FALSE;
 	}
 
@@ -3048,7 +3043,7 @@ handle_request_body(struct mg_connection *conn, FILE *fp)
 {
 	struct mg_request_info	*ri = &conn->request_info;
 	const char	*expect, *tmp;
-	uint64_t	content_len;
+	int64_t		content_len;
 	char		buf[BUFSIZ];
 	int		to_read, nread, already_read;
 	bool_t		success_code = FALSE;
@@ -3056,7 +3051,7 @@ handle_request_body(struct mg_connection *conn, FILE *fp)
 	content_len = get_content_length(conn);
 	expect = mg_get_header(conn, "Expect");
 
-	if (content_len == UNKNOWN_CONTENT_LENGTH) {
+	if (content_len == -1) {
 		send_error(conn, 411, "Length Required", "");
 	} else if (expect != NULL && mg_strcasecmp(expect, "100-continue")) {
 		send_error(conn, 417, "Expectation Failed", "");
@@ -3067,7 +3062,7 @@ handle_request_body(struct mg_connection *conn, FILE *fp)
 		already_read = ri->post_data_len;
 		assert(already_read >= 0);
 
-		if (content_len <= (uint64_t) already_read) {
+		if (content_len <= (int64_t) already_read) {
 			ri->post_data_len = (int) content_len;
 			/*
 			 * If fp is NULL, this is embedded mode, and we do not
@@ -3088,14 +3083,14 @@ handle_request_body(struct mg_connection *conn, FILE *fp)
 				(void) memcpy(ri->post_data, tmp, already_read);
 			} else {
 				(void) push(fp, INVALID_SOCKET, NULL,
-				    ri->post_data, (uint64_t) already_read);
+				    ri->post_data, (int64_t) already_read);
 			}
 
 			content_len -= already_read;
 
 			while (content_len > 0) {
 				to_read = sizeof(buf);
-				if ((uint64_t) to_read > content_len)
+				if ((int64_t) to_read > content_len)
 					to_read = (int) content_len;
 				nread = pull(NULL, conn->client.sock,
 				    conn->ssl, buf, to_read);
@@ -3366,21 +3361,8 @@ send_cgi(struct mg_connection *conn, const char *prog)
 	conn->num_bytes_sent += mg_write(conn,
 	    buf + headers_len, data_len - headers_len);
 
-	/*
-	 * Read the rest of CGI output and send to the client. If read from
-	 * CGI returns 0, CGI has finished output. If it returns < 0,
-	 * some read error occured (CGI process terminated unexpectedly?)
-	 * If write to the client fails, the means client has disconnected
-	 * unexpectedly.
-	 * In all such cases, stop data exchange and do cleanup.
-	 */
-	do {
-		n = pull(out, INVALID_SOCKET, NULL, buf, sizeof(buf));
-		if (n > 0)
-			n = mg_write(conn, buf, n);
-		if (n > 0)
-			conn->num_bytes_sent += n;
-	} while (n > 0);
+	/* Read the rest of CGI output and send to the client */
+	send_opened_file_stream(conn, out, INT64_MAX);
 
 done:
 	if (pid != (pid_t) -1)
@@ -3510,8 +3492,7 @@ do_ssi_include(struct mg_connection *conn, const char *ssi, char *tag,
 		    conn->ctx->options[OPT_SSI_EXTENSIONS])) {
 			send_ssi_file(conn, path, fp, include_level + 1);
 		} else {
-			send_opened_file_stream(conn, fp,
-			    UNKNOWN_CONTENT_LENGTH);
+			send_opened_file_stream(conn, fp, INT64_MAX);
 		}
 		(void) fclose(fp);
 	}
@@ -3528,7 +3509,7 @@ do_ssi_exec(struct mg_connection *conn, char *tag)
 	} else if ((fp = popen(cmd, "r")) == NULL) {
 		cry(conn, "Cannot SSI #exec: [%s]: %s", cmd, strerror(ERRNO));
 	} else {
-		send_opened_file_stream(conn, fp, UNKNOWN_CONTENT_LENGTH);
+		send_opened_file_stream(conn, fp, INT64_MAX);
 		(void) pclose(fp);
 	}
 }
@@ -3806,7 +3787,7 @@ log_access(const struct mg_connection *conn)
 	flockfile(conn->ctx->access_log);
 
 	(void) fprintf(conn->ctx->access_log,
-	    "%s - %s [%s] \"%s %s HTTP/%s\" %d %" UINT64_FMT "u",
+	    "%s - %s [%s] \"%s %s HTTP/%s\" %d %" INT64_FMT,
 	    inet_ntoa(conn->client.rsa.u.sin.sin_addr),
 	    ri->remote_user == NULL ? "-" : ri->remote_user,
 	    date,
@@ -4401,16 +4382,16 @@ reset_connection_attributes(struct mg_connection *conn)
 static void
 shift_to_next(struct mg_connection *conn, char *buf, int req_len, int *nread)
 {
-	uint64_t	cl;
-	int		over_len, body_len;
+	int64_t	cl;
+	int	over_len, body_len;
 
 	cl = get_content_length(conn);
 	over_len = *nread - req_len;
 	assert(over_len >= 0);
 
-	if (cl == UNKNOWN_CONTENT_LENGTH) {
+	if (cl == -1) {
 		body_len = 0;
-	} else if (cl < (uint64_t) over_len) {
+	} else if (cl < (int64_t) over_len) {
 		body_len = (int) cl;
 	} else {
 		body_len = over_len;
