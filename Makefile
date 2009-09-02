@@ -30,6 +30,7 @@ LIB=		_$(PROG).so
 linux:
 	$(CC) $(LINFLAGS) mongoose.c -shared -fPIC -fpic -s -o $(LIB)
 	$(CC) $(LINFLAGS) mongoose.c main.c -s -o $(PROG)
+
 bsd:
 	$(CC) $(CFLAGS) mongoose.c -shared -lpthread -s -fpic -fPIC -o $(LIB)
 	$(CC) $(CFLAGS) mongoose.c main.c -lpthread -s -o $(PROG)
