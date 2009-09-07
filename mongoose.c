@@ -1864,6 +1864,8 @@ static const struct {
 	{".mid",	4,	"audio/mid",			9},
 	{".m3u",	4,	"audio/x-mpegurl",		15},
 	{".ram",	4,	"audio/x-pn-realaudio",		20},
+	{".xml",	4,	"text/xml",			8},
+	{".xslt",	5,	"application/xml",		15},
 	{".ra",		3,	"audio/x-pn-realaudio",		20},
 	{".doc",	4,	"application/msword",		19},
 	{".exe",	4,	"application/octet-stream",	24},
