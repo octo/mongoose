@@ -165,6 +165,8 @@ typedef struct DIR {
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/time.h>
+#include <stdint.h>
+#include <inttypes.h>
 
 #include <pwd.h>
 #include <unistd.h>
@@ -183,7 +185,7 @@ typedef struct DIR {
 #define	mg_rename(x, y)		rename(x, y)
 #define	ERRNO			errno
 #define	INVALID_SOCKET		(-1)
-#define INT64_FMT		"lld"
+#define INT64_FMT		PRId64
 typedef int SOCKET;
 
 #endif /* End of Windows and UNIX specific includes */
@@ -3276,7 +3278,7 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 static void
 send_cgi(struct mg_connection *conn, const char *prog)
 {
-	int			headers_len, data_len, i, n;
+	int			headers_len, data_len, i;
 	const char		*status;
 	char			buf[MAX_REQUEST_SIZE], *pbuf;
 	struct mg_request_info	ri;
