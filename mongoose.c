@@ -1743,8 +1743,6 @@ mg_create_socket(struct mg_context *ctx, const struct addrinfo *ai)
 	int on;
 	int status;
 
-	char node[NI_MAXHOST];
-
 	sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
 	if (sock == INVALID_SOCKET) {
 		cry(fc(ctx), "%s: socket(2) failed", __func__);
