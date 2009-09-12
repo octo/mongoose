@@ -46,6 +46,8 @@ struct mg_request_info {
 	char	*remote_user;		/* Authenticated user	*/
 	long	remote_ip;		/* Client's IP address	*/
 	int	remote_port;		/* Client's port	*/
+	char	remote_node[1025];	/* Numeric node name	*/
+	char	remote_service[32];	/* Numeric service name	*/
 	int	post_data_len;		/* POST buffer length	*/
 	int	status_code;		/* HTTP status code	*/
 	int	num_headers;		/* Number of headers	*/

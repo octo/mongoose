@@ -160,6 +160,7 @@ typedef struct DIR {
 #else				/* UNIX  specific	*/
 #include <sys/wait.h>
 #include <sys/socket.h>
+#include <netdb.h>
 #include <sys/select.h>
 #include <sys/mman.h>
 #include <netinet/in.h>
@@ -189,6 +190,13 @@ typedef struct DIR {
 typedef int SOCKET;
 
 #endif /* End of Windows and UNIX specific includes */
+
+#ifndef NI_MAXHOST
+#  define NI_MAXHOST 1025
+#endif
+#ifndef NI_MAXSERV
+#  define NI_MAXSERV 32
+#endif
 
 #include "mongoose.h"
 
@@ -325,7 +333,7 @@ struct usa {
 	socklen_t len;
 	union {
 		struct sockaddr	sa;
-		struct sockaddr_in sin;
+		struct sockaddr_storage sas;
 	} u;
 };
 
@@ -468,6 +476,44 @@ fc(struct mg_context *ctx)
 	return (&fake_connection);
 }
 
+static char *
+sa_to_node (const struct sockaddr *sa, socklen_t sa_len,
+		char *buffer, size_t buffer_size)
+{
+	int status;
+
+	status = getnameinfo (sa, sa_len,
+			buffer, buffer_size,
+			/* service = */ NULL, 0,
+			NI_NUMERICHOST | NI_NUMERICSERV);
+	if (status != 0) {
+		snprintf (buffer, buffer_size, "Error: %s",
+				gai_strerror (status));
+	}
+
+	buffer[buffer_size - 1] = 0;
+	return (buffer);
+}
+
+static char *
+sa_to_service (const struct sockaddr *sa, socklen_t sa_len,
+		char *buffer, size_t buffer_size)
+{
+	int status;
+
+	status = getnameinfo (sa, sa_len,
+			/* node = */ NULL, 0,
+			buffer, buffer_size,
+			NI_NUMERICHOST | NI_NUMERICSERV);
+	if (status != 0) {
+		snprintf (buffer, buffer_size, "Error: %s",
+				gai_strerror (status));
+	}
+
+	buffer[buffer_size - 1] = 0;
+	return (buffer);
+}
+
 /*
  * If an embedded code does not intercept logging by calling
  * mg_set_log_callback(), this function is used for logging. It prints
@@ -480,6 +526,7 @@ builtin_error_log(struct mg_connection *conn,
 {
 	FILE	*fp;
 	time_t	timestamp;
+	char    node[NI_MAXHOST];
 
 	fp = conn->ctx->error_log;
 	flockfile(fp);
@@ -489,7 +536,8 @@ builtin_error_log(struct mg_connection *conn,
 	(void) fprintf(fp,
 	    "[%010lu] [error] [client %s] ",
 	    (unsigned long) timestamp,
-	    inet_ntoa(conn->client.rsa.u.sin.sin_addr));
+	    sa_to_node (&conn->client.rsa.u.sa, conn->client.rsa.len,
+		    node, sizeof (node)));
 
 	if (request_info->request_method != NULL)
 		(void) fprintf(fp, "%s %s: ",
@@ -1689,46 +1737,139 @@ convert_uri_to_file_name(struct mg_connection *conn, const char *uri,
  * Address format: [local_ip_address:]port_number
  */
 static SOCKET
-mg_open_listening_port(struct mg_context *ctx, const char *str, struct usa *usa)
+mg_create_socket(struct mg_context *ctx, const struct addrinfo *ai)
 {
-	SOCKET		sock;
-	int		on = 1, a, b, c, d, port;
+	SOCKET sock;
+	int on;
+	int status;
 
-	/* MacOS needs that. If we do not zero it, bind() will fail. */
-	(void) memset(usa, 0, sizeof(*usa));
+	char node[NI_MAXHOST];
 
-	if (sscanf(str, "%d.%d.%d.%d:%d", &a, &b, &c, &d, &port) == 5) {
-		/* IP address to bind to is specified */
-		usa->u.sin.sin_addr.s_addr =
-		    htonl((a << 24) | (b << 16) | (c << 8) | d);
-	} else if (sscanf(str, "%d", &port) == 1) {
-		/* Only port number is specified. Bind to all addresses */
-		usa->u.sin.sin_addr.s_addr = htonl(INADDR_ANY);
-	} else {
+	fprintf (stdout, "Trying to open socket at address %s\n",
+			sa_to_node (ai->ai_addr, ai->ai_addrlen,
+				node, sizeof (node)));
+
+	sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+	if (sock == INVALID_SOCKET) {
+		cry(fc(ctx), "%s: socket(2) failed", __func__);
 		return (INVALID_SOCKET);
 	}
 
-	usa->len			= sizeof(usa->u.sin);
-	usa->u.sin.sin_family		= AF_INET;
-	usa->u.sin.sin_port		= htons((uint16_t) port);
-
-	if ((sock = socket(PF_INET, SOCK_STREAM, 6)) != INVALID_SOCKET &&
-	    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
-	    (char *) &on, sizeof(on)) == 0 &&
-	    bind(sock, &usa->u.sa, usa->len) == 0 &&
-	    listen(sock, 20) == 0) {
-		/* Success */
-		set_close_on_exec(sock);
-	} else {
-		/* Error */
-		cry(fc(ctx), "%s(%d): %s", __func__, port, strerror(ERRNO));
-		if (sock != INVALID_SOCKET)
-			(void) closesocket(sock);
-		sock = INVALID_SOCKET;
+	on = 1;
+	status = setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &on, sizeof (on));
+	if (status != 0) {
+		cry(fc(ctx), "%s: setsockopt(2) failed", __func__);
+		closesocket(sock);
+		return (INVALID_SOCKET);
 	}
 
+	status = bind (sock, ai->ai_addr, ai->ai_addrlen);
+	if (status != 0) {
+		cry(fc(ctx), "%s: bind(2) failed", __func__);
+		closesocket(sock);
+		return (INVALID_SOCKET);
+	}
+
+	status = listen (sock, 20);
+	if (status != 0) {
+		cry(fc(ctx), "%s: listen(2) failed", __func__);
+		closesocket(sock);
+		return (INVALID_SOCKET);
+	}
+
+	set_close_on_exec (sock);
 	return (sock);
 }
+
+static bool_t
+mg_open_listening_port(struct mg_context *ctx, const char *str, int is_ssl)
+{
+	struct addrinfo ai_hints;
+	struct addrinfo *ai_list;
+	struct addrinfo *ai_ptr;
+	int status;
+
+	char buffer[NI_MAXHOST + NI_MAXSERV + 4];
+	char *node;
+	char *service;
+
+	if (str == NULL)
+		return (FALSE);
+
+	mg_strlcpy (buffer, str, sizeof (buffer));
+
+	/* Syntax: "[2001:780:104:1:21c:c0ff:fe7a:db6c]:80" */
+	if (buffer[0] == '[') { /* IPv6+port syntax */
+		node = &buffer[1];
+
+		service = strchr (node, ']');
+		if (service == NULL) {
+			cry(fc(ctx), "Invalid port syntax: %s", str);
+			return (FALSE);
+		}
+		*service = 0;
+
+		service++;
+		if (*service != ':') {
+			cry(fc(ctx), "Invalid port syntax: %s", str);
+			return (FALSE);
+		}
+
+		service++;
+	} else {
+		service = strchr (buffer, ':');
+		if (service == NULL) { /* Port only syntax */
+			node = NULL;
+			service = buffer;
+		} else { /* IPv4+port syntax */
+			*service = 0;
+			service++;
+			node = buffer;
+		}
+	}
+
+	assert (service != NULL);
+	if (*service == 0) {
+		cry(fc(ctx), "Invalid port syntax: %s", str);
+		return (FALSE);
+	}
+
+	memset (&ai_hints, 0, sizeof (ai_hints));
+	/* Tell getaddrinfo to return INADDR_ANY / IN6ADDR_ANY_INIT if the `node'
+	 * argument is NULL. */
+	ai_hints.ai_flags = AI_PASSIVE;
+#ifdef AI_ADDRCONFIG
+	ai_hints.ai_flags |= AI_ADDRCONFIG;
+#endif
+	ai_hints.ai_family = AF_UNSPEC;
+	ai_hints.ai_socktype = SOCK_STREAM;
+
+	ai_list = NULL;
+	status = getaddrinfo (node, service, &ai_hints, &ai_list);
+	if (status != 0) {
+		cry(fc(ctx), "getaddrinfo (%s, %s) failed: %s",
+				(node == NULL) ? "NULL" : node,
+				service, gai_strerror (status));
+		return (FALSE);
+	}
+	assert (ai_list != NULL);
+
+	for (ai_ptr = ai_list; ai_ptr != NULL; ai_ptr = ai_ptr->ai_next) {
+		SOCKET s;
+
+		s = mg_create_socket (ctx, ai_ptr);
+		if (s == INVALID_SOCKET)
+			continue;
+
+		ctx->listeners[ctx->num_listeners].sock = s;
+		ctx->listeners[ctx->num_listeners].is_ssl = is_ssl;
+		ctx->num_listeners++;
+	}
+
+	freeaddrinfo (ai_list);
+
+	return (TRUE);
+} /* bool_t mg_open_listening_port */
 
 /*
  * Check whether full request is buffered. Return:
@@ -2836,7 +2977,7 @@ is_valid_http_method(const char *method)
 static bool_t
 parse_http_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
 {
-	int	success_code = FALSE;
+	bool_t success_code = FALSE;
 
 	ri->request_method = skip(&buf, " ");
 	ri->uri = skip(&buf, " ");
@@ -2845,11 +2986,42 @@ parse_http_request(char *buf, struct mg_request_info *ri, const struct usa *usa)
 	if (is_valid_http_method(ri->request_method) &&
 	    ri->uri[0] == '/' &&
 	    strncmp(ri->http_version, "HTTP/", 5) == 0) {
+		int status;
+
 		ri->http_version += 5;   /* Skip "HTTP/" */
 		parse_http_headers(&buf, ri);
-		ri->remote_port = ntohs(usa->u.sin.sin_port);
-		(void) memcpy(&ri->remote_ip, &usa->u.sin.sin_addr.s_addr, 4);
-		ri->remote_ip = ntohl(ri->remote_ip);
+
+		/* Backwards compatibility code: Set `remote_ip' and
+		 * `remote_port'. */
+		if ((usa->u.sa.sa_family == AF_INET)
+				&& (usa->len == sizeof (struct sockaddr_in))) {
+			struct sockaddr_in sin;
+
+			memcpy (&sin, &usa->u.sa, sizeof (sin));
+
+			ri->remote_port = ntohs(sin.sin_port);
+			(void) memcpy(&ri->remote_ip, &sin.sin_addr.s_addr, 4);
+			ri->remote_ip = ntohl(ri->remote_ip);
+		} else {
+			ri->remote_port = -1;
+			ri->remote_ip = -1;
+		}
+
+		/* Possible future extension: Make flags configurable to allow
+		 * name resolution (reverse lookups). */
+		status = getnameinfo (&usa->u.sa, usa->len,
+				ri->remote_node, sizeof (ri->remote_node),
+				ri->remote_service, sizeof (ri->remote_service),
+				NI_NUMERICHOST | NI_NUMERICSERV);
+		if (status != 0) {
+			snprintf (ri->remote_node, sizeof (ri->remote_node),
+					"Error looking up node: %s",
+					gai_strerror (status));
+			ri->remote_node[sizeof (ri->remote_node) - 1] = 0;
+			memset (ri->remote_service, 0,
+					sizeof (ri->remote_service));
+		}
+
 		success_code = TRUE;
 	}
 
@@ -3180,6 +3352,7 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 	struct vec	var_vec;
 	char		*p;
 	int		i;
+	char            server_port[NI_MAXSERV];
 
 	blk->len = blk->nvars = 0;
 	blk->conn = conn;
@@ -3198,13 +3371,14 @@ prepare_cgi_environment(struct mg_connection *conn, const char *prog,
 	addenv(blk, "%s", "GATEWAY_INTERFACE=CGI/1.1");
 	addenv(blk, "%s", "SERVER_PROTOCOL=HTTP/1.1");
 	addenv(blk, "%s", "REDIRECT_STATUS=200");	/* PHP */
-	addenv(blk, "SERVER_PORT=%d", ntohs(conn->client.lsa.u.sin.sin_port));
+	addenv(blk, "SERVER_PORT=%s",
+			sa_to_service (&conn->client.lsa.u.sa, conn->client.lsa.len,
+				server_port, sizeof (server_port)));
 	addenv(blk, "SERVER_ROOT=%s", root);
 	addenv(blk, "DOCUMENT_ROOT=%s", root);
 	addenv(blk, "REQUEST_METHOD=%s", conn->request_info.request_method);
-	addenv(blk, "REMOTE_ADDR=%s",
-	    inet_ntoa(conn->client.rsa.u.sin.sin_addr));
-	addenv(blk, "REMOTE_PORT=%d", conn->request_info.remote_port);
+	addenv(blk, "REMOTE_ADDR=%s", conn->request_info.remote_node);
+	addenv(blk, "REMOTE_PORT=%s", conn->request_info.remote_service);
 	addenv(blk, "REQUEST_URI=%s", conn->request_info.uri);
 
 	slash = strrchr(conn->request_info.uri, '/');
@@ -3727,7 +3901,6 @@ close_all_listening_sockets(struct mg_context *ctx)
 static bool_t
 set_ports_option(struct mg_context *ctx, const char *list)
 {
-	SOCKET		sock;
 	int		is_ssl;
 	struct vec	vec;
 	struct socket	*listener;
@@ -3744,19 +3917,14 @@ set_ports_option(struct mg_context *ctx, const char *list)
 		    (int) (ARRAY_SIZE(ctx->listeners) - 1)) {
 			cry(fc(ctx), "%s", "Too many listeninig sockets");
 			return (FALSE);
-		} else if ((sock = mg_open_listening_port(ctx,
-		    vec.ptr, &listener->lsa)) == INVALID_SOCKET) {
-			cry(fc(ctx), "cannot bind to %.*s", vec.len, vec.ptr);
-			return (FALSE);
 		} else if (is_ssl == TRUE && ctx->ssl_ctx == NULL) {
-			(void) closesocket(sock);
 			cry(fc(ctx), "cannot add SSL socket, please specify "
 			    "-ssl_cert option BEFORE -ports option");
 			return (FALSE);
-		} else {
-			listener->sock = sock;
-			listener->is_ssl = is_ssl;
-			ctx->num_listeners++;
+		} else if (!mg_open_listening_port(ctx, vec.ptr, is_ssl)) {
+			cry(fc(ctx), "cannot open socket: %.*s",
+					vec.len, vec.ptr);
+			return (FALSE);
 		}
 	}
 
@@ -3779,7 +3947,8 @@ static void
 log_access(const struct mg_connection *conn)
 {
 	const struct mg_request_info *ri;
-	char		date[64];
+	char date[64];
+	char node[NI_MAXHOST];
 
 	if (conn->ctx->access_log == NULL)
 		return;
@@ -3793,7 +3962,8 @@ log_access(const struct mg_connection *conn)
 
 	(void) fprintf(conn->ctx->access_log,
 	    "%s - %s [%s] \"%s %s HTTP/%s\" %d %" INT64_FMT,
-	    inet_ntoa(conn->client.rsa.u.sin.sin_addr),
+	    sa_to_node (&conn->client.rsa.u.sa, conn->client.rsa.len,
+		    node, sizeof (node)),
 	    ri->remote_user == NULL ? "-" : ri->remote_user,
 	    date,
 	    ri->request_method ? ri->request_method : "-",
@@ -3822,10 +3992,17 @@ check_acl(struct mg_context *ctx, const char *list, const struct usa *usa)
 {
 	int		a, b, c, d, n, mask, allowed;
 	char		flag;
+	struct sockaddr_in sin;
 	uint32_t	acl_subnet, acl_mask, remote_ip;
 	struct vec	vec;
 
-	(void) memcpy(&remote_ip, &usa->u.sin.sin_addr, sizeof(remote_ip));
+	/* FIXME: Non-IPv4 sockets are allowed everything! */
+	if ((usa->u.sa.sa_family != AF_INET)
+			|| (usa->len != sizeof (struct sockaddr_in)))
+		return (1);
+
+	memcpy (&sin, &usa->u.sa, sizeof (sin));
+	(void) memcpy(&remote_ip, &sin.sin_addr, sizeof(remote_ip));
 
 	/* If any ACL is set, deny by default */
 	allowed = '-';
@@ -4575,19 +4752,25 @@ put_socket(struct mg_context *ctx, const struct socket *sp)
 static void
 accept_new_connection(const struct socket *listener, struct mg_context *ctx)
 {
-	struct socket	accepted;
+	struct socket accepted;
 
-	accepted.rsa.len = sizeof(accepted.rsa.u.sin);
+	memset (&accepted, 0, sizeof (accepted));
+	accepted.rsa.len = sizeof(accepted.rsa.u.sas);
 	accepted.lsa = listener->lsa;
-	if ((accepted.sock = accept(listener->sock,
-	    &accepted.rsa.u.sa, &accepted.rsa.len)) == INVALID_SOCKET)
+
+	accepted.sock = accept(listener->sock,
+			&accepted.rsa.u.sa, &accepted.rsa.len);
+	if (accepted.sock == INVALID_SOCKET)
 		return;
 
 	lock_option(ctx, OPT_ACL);
 	if (ctx->options[OPT_ACL] != NULL &&
 	    !check_acl(ctx, ctx->options[OPT_ACL], &accepted.rsa)) {
+		char node[NI_MAXHOST];
+
 		cry(fc(ctx), "%s: %s is not allowed to connect",
-		    __func__, inet_ntoa(accepted.rsa.u.sin.sin_addr));
+		    __func__, sa_to_node (&accepted.rsa.u.sa, accepted.rsa.len,
+			    node, sizeof (node)));
 		(void) closesocket(accepted.sock);
 		unlock_option(ctx, OPT_ACL);
 		return;
