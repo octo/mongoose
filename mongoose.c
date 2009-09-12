@@ -1745,10 +1745,6 @@ mg_create_socket(struct mg_context *ctx, const struct addrinfo *ai)
 
 	char node[NI_MAXHOST];
 
-	fprintf (stdout, "Trying to open socket at address %s\n",
-			sa_to_node (ai->ai_addr, ai->ai_addrlen,
-				node, sizeof (node)));
-
 	sock = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
 	if (sock == INVALID_SOCKET) {
 		cry(fc(ctx), "%s: socket(2) failed", __func__);
